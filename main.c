@@ -1,6 +1,6 @@
 /*
 	Keyboard shortcut daemon.
-	
+
 	Via evdev module (/dev/input/eventX)
 */
 
@@ -47,7 +47,7 @@ EV_CNT                  (EV_MAX+1)
 Release		0
 Key Press	1
 Auto Repeat 2
- 
+
 * For key codes see keymap.h or linux/input.h
 
 * input event struct:
@@ -55,40 +55,37 @@ Auto Repeat 2
 	unsigned short type;
 	unsigned short code;
 	unsigned int value;
-	 
  */
 
 int main (int argc, char **argv)
-{	
+{
 	/* generic purpose counter */
 	int i, j, count;
 	signed char ch;
 	unsigned short cmd_opts = 0;
 	char *devnode = NULL;
-	
+
 	active = 1; /* must be  set to true to run binds */
-	
+
 	/* default conf_file */
 	/* fixme: what if there's no HOME environ var? */
 	conf_file = calloc(strlen(getenv("HOME")) + strlen("/.ebindkeysrc"), sizeof(char));
 	sprintf(conf_file, "%s/.ebindkeysrc", getenv("HOME"));
-	
+
 	/* work through command line options */
-	while( (ch = getopt(argc, argv, "f:dslrhn:")) != -1) 
+	while( (ch = getopt(argc, argv, "f:dslrhn:")) != -1)
 	{
-		switch (ch) 
+		switch (ch)
 		{
 			case 'f':
 				/* override default conf file */
 				free(conf_file);
 				conf_file = strdup(optarg);
 				break;
-				
 			case 'd':
 				/* don't fork at startup */
 				cmd_opts |= EBK_NODAEMON;
 				break;
-				
 			case 's':
 				/* don't fork when executing actions. */
 				cmd_opts |= EBK_NOFORK;
@@ -106,7 +103,6 @@ int main (int argc, char **argv)
 			case ':':
 				exit(1);
 				break;
-				
 			case 'h':
 				break;
 			/*default:
@@ -115,10 +111,10 @@ int main (int argc, char **argv)
 				break; */
 		}
 	}
-	
+
 	/* check if a conf file exists, if not, bitch at user */
 	FILE *conf_check;
-	
+
 	if (! (conf_check = fopen(conf_file, "r")) )
 	{
 		fprintf(stderr, "%s: could not open config file %s\n", argv[0], conf_file);
@@ -126,48 +122,48 @@ int main (int argc, char **argv)
 	} else fclose(conf_check);
 
 	settings *conf = load_settings(conf_file);
-	
+
 	/* combine command line options with setting file options.
 	 * command line options override conf file */
-	
+
 	conf->opts |= cmd_opts;
-	
+
 	if (devnode != NULL)
 		conf->dev = devnode;
-	
+
 	event *event_first = conf->event_first;
 	event *event_cur = event_first;
-	
+
 	event_list_global = &event_first;
-		
+
 	/* initialize key_press list */
 	key_press *list_start = calloc(1,sizeof(key_press));
 	list_start->next = NULL;
-	
+
 	/* points to the last struct in the linked list */
 	key_press *list_end = list_start;
 	key_press *list_cur, *list_prev;
-	
+
 	struct input_event *ievent;
-	
+
 	/* No buffering, for now. */
 	int eventfh;
-	
+
 	if (! (eventfh = open(conf->dev , O_RDONLY )))
 	{
 		fprintf(stderr, "%s: Error opening event device %s", argv[0], conf->dev);
 		exit(3);
 	}
-	
+
 	ievent = calloc(1, sizeof(struct input_event));
-	
+
 	/* How does a good parent prevent his children from becoming
 	 * part of the zombie hoard? He ignores them! */
 	signal(SIGCHLD, SIG_IGN);
-	
+
 	signal(SIGUSR1, reload_settings);
-	
-	if ( ! ( ISSET(conf->opts, EBK_NODAEMON) ) ) 
+
+	if ( ! ( ISSET(conf->opts, EBK_NODAEMON) ) )
 		if (fork()) exit(0);
 
 	for(;;)
@@ -177,11 +173,11 @@ int main (int argc, char **argv)
 			/* read() will always get sizeof(struct input_event) number
 			 * of bytes, the kernel gurantees this, so we only worry
 			 * about reads error. */
-			
+
 			perror("Error reading device");
 			exit(3);
 		}
-		
+
 		/* Key has been pressed */
 		if ( ievent->type == EV_KEY &&
 			 ievent->value == 1 )
@@ -191,9 +187,9 @@ int main (int argc, char **argv)
 				list_end->next = calloc(1,sizeof(key_press));
 				list_end = list_end->next;
 				list_end->next = NULL;
-				
+
 				/* check if we've hit a combo here */
-				
+
 				count = list_len(list_start);
 				event_cur = event_first;
 				while ( event_cur->next != NULL ) /* cycle through all events */
@@ -203,12 +199,12 @@ int main (int argc, char **argv)
 					if ( count == event_cur->key_count)
 					{
 						j = 0; /* set flag to 0 */
-						
+
 						/* cycle through all the keys for event_cur */
 						for ( i=0; i < event_cur->key_count; i++)
 						{
 							list_cur = list_start;
-							
+
 							/* check this event's keys to all currently pressed keys */
 							while(list_cur->next != NULL)
 							{
@@ -234,10 +230,10 @@ int main (int argc, char **argv)
 								}
 						}
 					}
-					
+
 					event_cur = event_cur->next;
 				}
-				
+
 				if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
 					printf(">%X<\n", ievent->code);
 					fflush(stdout);
@@ -255,36 +251,35 @@ int main (int argc, char **argv)
 					list_prev = list_cur;
 					list_cur = list_cur->next;
 				}
-				
+
 				/* if the bellow is true, most likely, a key was released
 				 * but ebindkeys didn't detect the press */
 				if (list_cur->next == NULL) 
 					continue;
-				
-				
+
 				if (list_prev == NULL)
 				{
 					/* no previous? we're at start! */
-					list_start = list_cur->next;					
+					list_start = list_cur->next;
 				}
 				else
 				{
 					list_prev->next = list_cur->next;
 				}
-				
+
 				free(list_cur);
-				
+
 				if ( ISSET(conf->opts,EBK_SHOWKEYS) )
 				{
 					printf("<%X>\n", ievent->code);
 					fflush(stdout);
 				}
-				 
+
 			}
 	}
-	
+
 	close(eventfh);
-	
+
 	return 0;
 }
 
@@ -292,24 +287,24 @@ int main (int argc, char **argv)
 settings *load_settings (const char *conffile)
 {
 	/* load settings from conffile */
-	
+
 	/* generic purpose counters */
 	unsigned int i, j;
-	
+
 	/* declare and initialize the first event */
 	event *event_first = calloc(1, sizeof(event));
 	event_first->next = NULL;
 	event *event_cur = event_first;
-	
+
 	settings *conf = calloc(1, sizeof(settings));
-	
+
 	cfg_opt_t ebk_event_opts[] =
 	{
 		CFG_INT_LIST("keys", "", CFGF_NONE),
 		CFG_STR("action", "", CFGF_NONE),
 		CFG_END()
-	};	
-	
+	};
+
 	cfg_opt_t ebk_opts[] =
 	{
 		CFG_BOOL("daemon", 1, CFGF_NONE),
@@ -317,29 +312,29 @@ settings *load_settings (const char *conffile)
 		CFG_SEC("event", ebk_event_opts, CFGF_MULTI),
 		CFG_END()
 	};
-	
+
 	cfg_t *cfg, *cfg_section;
-	
+
 	cfg = cfg_init(ebk_opts, CFGF_NONE);
-	
+
 	if (cfg_parse(cfg, conffile) == CFG_PARSE_ERROR)
 		exit(1);
-		
+
 	conf->dev = strdup(cfg_getstr(cfg, "dev"));
-	
+
 	if ( ! cfg_getbool(cfg, "daemon") )
 		conf->opts |= EBK_NODAEMON;
-	
+
 	for (i=0; i < cfg_size(cfg, "event"); i++)
 	{
 		cfg_section = cfg_getnsec(cfg, "event", i);
-		
+
 		/* easy peasy, set the action */
 		event_cur->action = strdup(cfg_getstr(cfg_section, "action"));
-		
+
 		/* set key_count */
 		event_cur->key_count = cfg_size(cfg_section, "keys");
-		
+
 		/* set key array */
 		event_cur->keys = calloc(sizeof(short), event_cur->key_count);
 		for (j=0; j < event_cur->key_count; j++)
@@ -348,20 +343,20 @@ settings *load_settings (const char *conffile)
 			{
 				fprintf(stderr, "%s: Invalid key name: %s\n", conffile, cfg_getnstr(cfg_section, "keys", j));
 				exit(2);
-			}			
+			}
 			event_cur->keys[j] =  cfg_getnint(cfg_section, "keys", j);
-		}	
-		
+		}
+
 		/* prep the next event list item */
 		event_cur->next = calloc(1, sizeof(event));
 		event_cur = event_cur->next;
 		event_cur->next = NULL;
 	}
-	
+
 	cfg_free(cfg);
-	
+
 	conf->event_first = event_first;
-	
+
 	return(conf);
 }
 
