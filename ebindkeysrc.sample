@@ -1,7 +1,7 @@
-# comment test
+# ebindkeys-zipit config file
 
-# specifying dev is mandatory.
-dev = "/dev/input/event4"
+# specifying a device is mandatory.
+dev = "/dev/input/event1"
 
 # if, for some odd reason, you don't want ebindkeys to fork 
 # at start up, uncomment the below. Default is Yes
@@ -9,13 +9,15 @@ dev = "/dev/input/event4"
 
 event
 {
+	# CTRL-Options: TOGGLE action turns on or off ebindkeys mappings
 	action = "TOGGLE"
-	keys = {0x63}
+	keys = {0x1d,0x165} 
 }
 
 
-event
-{
-	action = "echo HI | wall"
-	keys = {0x01}
-}
+#event
+#{
+	# ESC(Smiley): Hello world example
+#	action = "echo Hello World!"
+#	keys = {0x01}
+#}
