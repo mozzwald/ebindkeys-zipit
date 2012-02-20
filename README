@@ -1,0 +1,65 @@
+----------------------------ebindkeys-zipit-------------------------------
+
+ebindkeys-zipit lets you bind a key or key-combo to a command by using
+the kernel's input event interface.
+
+Some good examples of its use are using a button (like the options button)
+to toggle the brightness level or binding the play and stop buttons to mpc
+commands for controlling mpd.
+
+It is very important to note that this does not in any way trap input. If
+you bind a command to the m key, your command will be ran everytime m is 
+pressed, but an m will also be sent to whatever program is currently in 
+the foreground (be it an X program or a console program). Thus this 
+program is best used for buttons that have not been mapped to a 
+character, such as shift, alt, options and home. 
+
+-------------------------Command Line Options----------------------------
+
+Argument	 Description
+  -r       Enables reporting. Shows when a key is pressed and released
+  -d       Do not fork. Probably best used in combination with -r or 
+              to make sure you're seeing any error messages you might 
+              otherwise be missing
+  -f       <config file>
+  -n       device node to use: /dev/input/eventX
+  -s       Do not fork when executing actions
+
+--------------------------Configuration File-----------------------------
+
+The configuration file should be easy enough to figure out from the 
+examples. The most important line is (where X is a number):
+
+dev = /dev/input/eventX 
+
+To bind a key to a single button:
+
+# home toggles headphone mute  
+event
+{
+    action = "amixer sset Headphone toggle"
+    keys = {0x66}
+}
+Note that commenting works like in shell scripts, a hash denotes comment.
+
+To bind a key combo:
+
+# home+m toggles headphone mute 
+event
+{
+    action = "amixer sset Headphone toggle"
+    keys = {0x66,0x32}
+}
+Currently, key press order doesn't matter. That is not ideal and will 
+probably be changed in the future.
+
+The binds can be toggled on and off if you add a sepecial event:
+
+# toggle events
+event
+{
+    action = "TOGGLE"
+    keys = {0x01}
+}
+When you press the key assocaited with the action “TOGGLE” all key presses 
+will be ignored except TOGGLE, which will reenable the other events.
