@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/mman.h>
 
 #include <linux/input.h>
 
@@ -24,6 +25,13 @@
 #include "confuse.h"
 #include "ebindkeys.h"
 
+#define MAP_SIZE 4096UL
+#define GPIO 98	/* lid switch */
+#define GPIO_BASE 0x40E00000 /* PXA270 GPIO Register Base */
+
+#define LID_CLOSED  0
+#define LID_OPEN    1
+#define LID_UNKNOWN 255
 
 /* reference:
 
@@ -57,6 +65,51 @@ Auto Repeat 2
 	unsigned short code;
 	unsigned int value;
 */
+
+typedef unsigned long u32;
+
+int regoffset(int gpio) {
+	if (gpio < 32) return 0;
+	if (gpio < 64) return 4;
+	if (gpio < 96) return 8;
+	return 0x100;
+}
+
+int gpio_read(void *map_base, int gpio) {
+	volatile u32 *reg = (u32*)((u32)map_base + regoffset(gpio));
+	return (*reg >> (gpio&31)) & 1;
+}
+
+int lidstate() {
+	int fd;
+	int retval;
+	void *map_base;
+
+	fd = open("/dev/mem", O_RDONLY | O_SYNC);
+   	if (fd < 0) {printf("Please run as root"); exit(1);}
+
+    	map_base = mmap(0, MAP_SIZE, PROT_READ, MAP_SHARED, fd, GPIO_BASE);
+	if(map_base == (void *) -1) exit(255);
+
+	switch(gpio_read(map_base,98))
+	{
+		case 0: /* lid is closed */
+			retval = LID_CLOSED;
+			break;
+
+		case 1: /* lid is open */
+			retval = LID_OPEN;
+			break;
+
+		default:
+			retval = LID_UNKNOWN;
+
+	}
+
+	if(munmap(map_base, MAP_SIZE) == -1) exit(255) ;
+	close(fd);
+	return retval;
+}
 
 int keys_on() {	//turns backlight power on
 
@@ -212,107 +265,109 @@ int main (int argc, char **argv)
 		}
 
 		/* Key has been pressed */
-		if ( ievent->type == EV_KEY &&
-			 ievent->value == 1 )
-			{
-				/* reset the keyboard timer and turn on the lights */
-				s = pthread_cancel(timer_thr);
-				keys_on();
-				s = pthread_create(&timer_thr, NULL, keyTimer, NULL);
-
-				/* add to depressed struct */
-				list_end->code = ievent->code;
-				list_end->next = calloc(1,sizeof(key_press));
-				list_end = list_end->next;
-				list_end->next = NULL;
-
-				/* check if we've hit a combo here */
-
-				count = list_len(list_start);
-				event_cur = event_first;
-				while ( event_cur->next != NULL ) /* cycle through all events */
+		if(lidstate() == 1){ // only send keypress if lid is open
+			if ( ievent->type == EV_KEY &&
+				 ievent->value == 1 )
 				{
-					/* don't bother matching keys if the key count doesn't match
-					 * the keys pressed count */
-					if ( count == event_cur->key_count)
+					/* reset the keyboard timer and turn on the lights */
+					s = pthread_cancel(timer_thr);
+					keys_on();
+					s = pthread_create(&timer_thr, NULL, keyTimer, NULL);
+	
+					/* add to depressed struct */
+					list_end->code = ievent->code;
+					list_end->next = calloc(1,sizeof(key_press));
+					list_end = list_end->next;
+					list_end->next = NULL;
+	
+					/* check if we've hit a combo here */
+	
+					count = list_len(list_start);
+					event_cur = event_first;
+					while ( event_cur->next != NULL ) /* cycle through all events */
 					{
-						j = 0; /* set flag to 0 */
-
-						/* cycle through all the keys for event_cur */
-						for ( i=0; i < event_cur->key_count; i++)
+						/* don't bother matching keys if the key count doesn't match
+						 * the keys pressed count */
+						if ( count == event_cur->key_count)
 						{
-							list_cur = list_start;
-
-							/* check this event's keys to all currently pressed keys */
-							while(list_cur->next != NULL)
+							j = 0; /* set flag to 0 */
+	
+							/* cycle through all the keys for event_cur */
+							for ( i=0; i < event_cur->key_count; i++)
 							{
-								if ( event_cur->keys[i] == list_cur->code )
-									j++;
-								list_cur = list_cur->next;
+								list_cur = list_start;
+	
+								/* check this event's keys to all currently pressed keys */
+								while(list_cur->next != NULL)
+								{
+									if ( event_cur->keys[i] == list_cur->code )
+										j++;
+									list_cur = list_cur->next;
+								}
+							}
+							if (j == event_cur->key_count) 
+							{
+								if (!strcmp(event_cur->action, "TOGGLE"))
+									active ^= 1;
+								else if (active) {
+								/* we have a go. fork and run the action */
+									if ( ISSET(conf->opts, EBK_NOFORK) )
+										system(event_cur->action);
+									else 
+										if (!fork())
+										{
+											system(event_cur->action);
+											exit(0);
+										};
+									}
 							}
 						}
-						if (j == event_cur->key_count) 
-						{
-							if (!strcmp(event_cur->action, "TOGGLE"))
-								active ^= 1;
-							else if (active) {
-							/* we have a go. fork and run the action */
-								if ( ISSET(conf->opts, EBK_NOFORK) )
-									system(event_cur->action);
-								else 
-									if (!fork())
-									{
-										system(event_cur->action);
-										exit(0);
-									};
-								}
-						}
+	
+						event_cur = event_cur->next;
 					}
-
-					event_cur = event_cur->next;
+	
+					if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
+						printf(">%X<\n", ievent->code);
+						fflush(stdout);
+					}
 				}
-
-				if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
-					printf(">%X<\n", ievent->code);
-					fflush(stdout);
-				}
-			}
-		/* Key has been released */
-		if ( ievent->type == EV_KEY &&
-			 ievent->value == 0 )
-			{
-				/* remove from depressed struct */
-				list_cur = list_start;
-				list_prev = NULL;
-				while (list_cur->code != ievent->code && list_cur->next != NULL)
+			/* Key has been released */
+			if ( ievent->type == EV_KEY &&
+				 ievent->value == 0 )
 				{
-					list_prev = list_cur;
-					list_cur = list_cur->next;
+					/* remove from depressed struct */
+					list_cur = list_start;
+					list_prev = NULL;
+					while (list_cur->code != ievent->code && list_cur->next != NULL)
+					{
+						list_prev = list_cur;
+						list_cur = list_cur->next;
+					}
+	
+					/* if the bellow is true, most likely, a key was released
+					 * but ebindkeys didn't detect the press */
+					if (list_cur->next == NULL) 
+						continue;
+	
+					if (list_prev == NULL)
+					{
+						/* no previous? we're at start! */
+						list_start = list_cur->next;
+					}
+					else
+					{
+						list_prev->next = list_cur->next;
+					}
+	
+					free(list_cur);
+	
+					if ( ISSET(conf->opts,EBK_SHOWKEYS) )
+					{
+						printf("<%X>\n", ievent->code);
+						fflush(stdout);
+					}
+	
 				}
-
-				/* if the bellow is true, most likely, a key was released
-				 * but ebindkeys didn't detect the press */
-				if (list_cur->next == NULL) 
-					continue;
-
-				if (list_prev == NULL)
-				{
-					/* no previous? we're at start! */
-					list_start = list_cur->next;
-				}
-				else
-				{
-					list_prev->next = list_cur->next;
-				}
-
-				free(list_cur);
-
-				if ( ISSET(conf->opts,EBK_SHOWKEYS) )
-				{
-					printf("<%X>\n", ievent->code);
-					fflush(stdout);
-				}
-
 			}
 	}
 
