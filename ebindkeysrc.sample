@@ -1,0 +1,21 @@
+# comment test
+
+# specifying dev is mandatory.
+dev = "/dev/input/event4"
+
+# if, for some odd reason, you don't want ebindkeys to fork 
+# at start up, uncomment the below. Default is Yes
+#daemon = no
+
+event
+{
+	action = "TOGGLE"
+	keys = {0x63}
+}
+
+
+event
+{
+	action = "echo HI | wall"
+	keys = {0x01}
+}
