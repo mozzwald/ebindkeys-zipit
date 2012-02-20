@@ -1,6 +1,6 @@
 # Makefile for ebindkeys
 CC?=gcc
-CFLAGS=-L. -L.. -O2 --std=c99
+CFLAGS=-L. -L.. -O2 --std=c99 -lpthread
 LIBS=
 
 

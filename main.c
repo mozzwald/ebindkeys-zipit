@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <pthread.h>
 
 #include <linux/input.h>
 
@@ -55,15 +56,44 @@ Auto Repeat 2
 	unsigned short type;
 	unsigned short code;
 	unsigned int value;
- */
+*/
+
+int keys_on() {	//turns backlight power on
+
+	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
+
+	//WARNING: opposite of what you might expect - 1 is off and 0 is on
+	if (key != NULL) {
+		fputs("0", key);
+		fclose(key);
+	}
+}
+
+int keys_off() { //turns backlight power off
+
+        FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
+
+        //WARNING: opposite of what you might expect - 1 is off and 0 is on
+        if (key != NULL) {
+                fputs("1", key);
+                fclose(key);
+        }
+}
+
+/* Wait X seconds then turn off keyboard lights */
+void *keyTimer(){
+	sleep(4);
+	keys_off();
+}
 
 int main (int argc, char **argv)
 {
 	/* generic purpose counter */
-	int i, j, count;
+	int i, j, count, s;
 	signed char ch;
 	unsigned short cmd_opts = 0;
 	char *devnode = NULL;
+	pthread_t timer_thr;
 
 	active = 1; /* must be  set to true to run binds */
 
@@ -166,6 +196,9 @@ int main (int argc, char **argv)
 	if ( ! ( ISSET(conf->opts, EBK_NODAEMON) ) )
 		if (fork()) exit(0);
 
+	/* Start keyboard blacklight timer */
+	s = pthread_create(&timer_thr, NULL, keyTimer, NULL);
+
 	for(;;)
 	{
 		if ( read(eventfh, ievent, sizeof(struct input_event)) == -1 )
@@ -182,6 +215,11 @@ int main (int argc, char **argv)
 		if ( ievent->type == EV_KEY &&
 			 ievent->value == 1 )
 			{
+				/* reset the keyboard timer and turn on the lights */
+				s = pthread_cancel(timer_thr);
+				keys_on();
+				s = pthread_create(&timer_thr, NULL, keyTimer, NULL);
+
 				/* add to depressed struct */
 				list_end->code = ievent->code;
 				list_end->next = calloc(1,sizeof(key_press));
