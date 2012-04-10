@@ -146,12 +146,18 @@ int main (int argc, char **argv)
 
 	/* check if a conf file exists, if not, bitch at user */
 	FILE *conf_check;
-
-	if (! (conf_check = fopen(conf_file, "r")) )
+	if (! (conf_check = fopen(conf_file, "r")) ) // check home or command line dir first
 	{
 		fprintf(stderr, "%s: could not open config file %s\n", argv[0], conf_file);
-		exit(2);
+		free(conf_file);
+		conf_file = "/etc/ebindkeysrc";
+		if (! (conf_check = fopen(conf_file, "r")) ) // check etc
+		{
+			fprintf(stderr, "%s: could not open config file %s\n", argv[0], conf_file);
+			exit(2);
+		} else fclose(conf_check);
 	} else fclose(conf_check);
+	printf("%s: Loaded config file %s\n", argv[0], conf_file);
 
 	settings *conf = load_settings(conf_file);
 
