@@ -5,6 +5,7 @@
 
 #define _GNU_SOURCE
 #define _XOPEN_SOURCE
+#define UINPUT_DEV_NAME "ebindkeys-uinput"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,8 +17,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-
+#include <sys/select.h>
+#include <sys/time.h>
+#include <termios.h>
 #include <signal.h>
+#include <linux/input.h>
+#include <linux/uinput.h>
+#include <inttypes.h>
 
 #include "confuse.h"
 #include "ebindkeys.h"
@@ -170,18 +176,54 @@ int main (int argc, char **argv)
 	key_press *list_end = list_start;
 	key_press *list_cur, *list_prev;
 
-	struct input_event *ievent;
+	struct input_event ievent;
 
 	/* No buffering, for now. */
 	int eventfh;
-
 	if (! (eventfh = open(conf->dev , O_RDONLY )))
 	{
 		fprintf(stderr, "%s: Error opening event device %s", argv[0], conf->dev);
 		exit(3);
 	}
 
-	ievent = calloc(1, sizeof(struct input_event));
+	/* Get exclusive access to the input device so we
+	 * can ignore keypresses when lid is closed */
+	int result = 0;
+	char name[256] = "Unknown";
+
+	result = ioctl(eventfh, EVIOCGNAME(sizeof(name)), name);
+	result = ioctl(eventfh, EVIOCGRAB, 1);
+
+	/* Setup uinput device for writing */
+	int ufile, res;
+	struct uinput_user_dev uinp;
+	ufile = open("/dev/input/uinput", O_WRONLY);
+	if (ufile == -1)
+		ufile = open("/dev/uinput", O_WRONLY);
+	if (ufile == -1)
+	{
+		fprintf(stderr, "Error opening uinput device! Is the uinput module loaded?");
+		exit(3);
+	}
+	ioctl(ufile, UI_SET_EVBIT, EV_KEY);
+	ioctl(ufile, UI_SET_EVBIT, EV_REL);
+	for (i = 0; i < KEY_MAX; i++)
+		ioctl(ufile, UI_SET_KEYBIT, i);
+	memset(&uinp, 0, sizeof(uinp));
+	uinp.id.version = 1;
+	uinp.id.bustype = BUS_USB;
+	strncpy(uinp.name, UINPUT_DEV_NAME, sizeof(UINPUT_DEV_NAME));
+	res = write(ufile, &uinp, sizeof(uinp));
+	if (res == -1)
+	{
+		fprintf(stderr, "Error setting up uinput device!");
+		exit(3);
+	}
+	if (ioctl(ufile, UI_DEV_CREATE) < 0)
+	{
+		fprintf(stderr, "Error creating uinput device!");
+		exit(3);
+	}
 
 	/* How does a good parent prevent his children from becoming
 	 * part of the zombie hoard? He ignores them! */
@@ -194,7 +236,7 @@ int main (int argc, char **argv)
 
 	for(;;)
 	{
-		if ( read(eventfh, ievent, sizeof(struct input_event)) == -1 )
+		if ( read(eventfh, &ievent, sizeof(struct input_event)) == -1 )
 		{
 			/* read() will always get sizeof(struct input_event) number
 			 * of bytes, the kernel gurantees this, so we only worry
@@ -204,111 +246,126 @@ int main (int argc, char **argv)
 			exit(3);
 		}
 
-		/* Key has been pressed */
-		if ( ievent->type == EV_KEY &&
-			 ievent->value == 1 )
-			{
-				/*reset the keyboard timer and turn on the lights */
-				onKeyPress();
+		/* Get lid status */
+		int lidstat = 255;
+		FILE *lid = fopen("/tmp/lidstate", "r");
+		if ( lid != NULL ) {
+			char buf [5];
+			lidstat = atoi(fgets(buf, sizeof buf, lid));
+			fclose(lid);
+		}
 
-				/* add to depressed struct */
-				list_end->code = ievent->code;
-				list_end->next = calloc(1,sizeof(key_press));
-				list_end = list_end->next;
-				list_end->next = NULL;
+		/* Do nothing if lid is closed */
+		if ( lidstat != 0 ) {
+			/* write the key press/release to uinput */
+			write(ufile, &ievent, sizeof(struct input_event));
 
-				/* check if we've hit a combo here */
-
-				count = list_len(list_start);
-				event_cur = event_first;
-				while ( event_cur->next != NULL ) /* cycle through all events */
+			/* Key has been pressed */
+			if ( ievent.type == EV_KEY &&
+				 ievent.value == 1 )
 				{
-					/* don't bother matching keys if the key count doesn't match
-					 * the keys pressed count */
-					if ( count == event_cur->key_count)
+					/*reset the keyboard timer and turn on the lights */
+					onKeyPress();
+
+					/* add to depressed struct */
+					list_end->code = ievent.code;
+					list_end->next = calloc(1,sizeof(key_press));
+					list_end = list_end->next;
+					list_end->next = NULL;
+
+					/* check if we've hit a combo here */
+
+					count = list_len(list_start);
+					event_cur = event_first;
+					while ( event_cur->next != NULL ) /* cycle through all events */
 					{
-						j = 0; /* set flag to 0 */
-
-						/* cycle through all the keys for event_cur */
-						for ( i=0; i < event_cur->key_count; i++)
+						/* don't bother matching keys if the key count doesn't match
+						 * the keys pressed count */
+						if ( count == event_cur->key_count)
 						{
-							list_cur = list_start;
+							j = 0; /* set flag to 0 */
 
-							/* check this event's keys to all currently pressed keys */
-							while(list_cur->next != NULL)
+							/* cycle through all the keys for event_cur */
+							for ( i=0; i < event_cur->key_count; i++)
 							{
-								if ( event_cur->keys[i] == list_cur->code )
-									j++;
-								list_cur = list_cur->next;
+								list_cur = list_start;
+
+								/* check this event's keys to all currently pressed keys */
+								while(list_cur->next != NULL)
+								{
+									if ( event_cur->keys[i] == list_cur->code )
+										j++;
+									list_cur = list_cur->next;
+								}
+							}
+							if (j == event_cur->key_count)
+							{
+								if (!strcmp(event_cur->action, "TOGGLE"))
+									active ^= 1;
+								else if (active) {
+								/* we have a go. fork and run the action */
+									if ( ISSET(conf->opts, EBK_NOFORK) )
+										system(event_cur->action);
+									else
+										if (!fork())
+										{
+											system(event_cur->action);
+											exit(0);
+										};
+									}
 							}
 						}
-						if (j == event_cur->key_count)
-						{
-							if (!strcmp(event_cur->action, "TOGGLE"))
-								active ^= 1;
-							else if (active) {
-							/* we have a go. fork and run the action */
-								if ( ISSET(conf->opts, EBK_NOFORK) )
-									system(event_cur->action);
-								else
-									if (!fork())
-									{
-										system(event_cur->action);
-										exit(0);
-									};
-								}
-						}
+
+						event_cur = event_cur->next;
+					}
+					if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
+						printf(">%X<\n", ievent.code);
+						fflush(stdout);
+					}
+				}
+			/* Key has been released */
+			if ( ievent.type == EV_KEY &&
+				 ievent.value == 0 )
+				{
+					/* remove from depressed struct */
+					list_cur = list_start;
+					list_prev = NULL;
+					while (list_cur->code != ievent.code && list_cur->next != NULL)
+					{
+						list_prev = list_cur;
+						list_cur = list_cur->next;
 					}
 
-					event_cur = event_cur->next;
+					/* if the bellow is true, most likely, a key was released
+					 * but ebindkeys didn't detect the press */
+					if (list_cur->next == NULL)
+						continue;
+
+
+					if (list_prev == NULL)
+					{
+						/* no previous? we're at start! */
+						list_start = list_cur->next;
+					}
+					else
+					{
+						list_prev->next = list_cur->next;
+					}
+
+					free(list_cur);
+
+					if ( ISSET(conf->opts,EBK_SHOWKEYS) )
+					{
+						printf("<%X>\n", ievent.code);
+						fflush(stdout);
+					}
+
 				}
-
-				if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
-					printf(">%X<\n", ievent->code);
-					fflush(stdout);
-				}
-			}
-		/* Key has been released */
-		if ( ievent->type == EV_KEY &&
-			 ievent->value == 0 )
-			{
-				/* remove from depressed struct */
-				list_cur = list_start;
-				list_prev = NULL;
-				while (list_cur->code != ievent->code && list_cur->next != NULL)
-				{
-					list_prev = list_cur;
-					list_cur = list_cur->next;
-				}
-
-				/* if the bellow is true, most likely, a key was released
-				 * but ebindkeys didn't detect the press */
-				if (list_cur->next == NULL)
-					continue;
-
-
-				if (list_prev == NULL)
-				{
-					/* no previous? we're at start! */
-					list_start = list_cur->next;
-				}
-				else
-				{
-					list_prev->next = list_cur->next;
-				}
-
-				free(list_cur);
-
-				if ( ISSET(conf->opts,EBK_SHOWKEYS) )
-				{
-					printf("<%X>\n", ievent->code);
-					fflush(stdout);
-				}
-
-			}
+		}
 	}
 
 	close(eventfh);
+	close(ufile);
 
 	return 0;
 }
