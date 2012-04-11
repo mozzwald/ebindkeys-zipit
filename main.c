@@ -24,10 +24,62 @@
 #include <linux/input.h>
 #include <linux/uinput.h>
 #include <inttypes.h>
+#include <sys/mman.h>
 
 #include "confuse.h"
 #include "ebindkeys.h"
 
+#define MAP_SIZE 4096UL
+
+#define GPIO 98	/* lid switch */
+#define GPIO_BASE 0x40E00000 /* PXA270 GPIO Register Base */
+
+typedef unsigned long u32;
+
+int regoffset(int gpio) {
+	if (gpio < 32) return 0;
+	if (gpio < 64) return 4;
+	if (gpio < 96) return 8;
+	return 0x100;
+}
+
+int gpio_read(void *map_base, int gpio) {
+	volatile u32 *reg = (u32*)((u32)map_base + regoffset(gpio));
+	return (*reg >> (gpio&31)) & 1;
+}
+
+#define LID_CLOSED  0
+#define LID_OPEN    1
+#define LID_UNKNOWN 255
+int lidstate() {
+	int fd;
+	int retval;
+	void *map_base;
+
+	fd = open("/dev/mem", O_RDONLY | O_SYNC);
+   	if (fd < 0) {printf("Please run as root"); exit(1);}
+
+    	map_base = mmap(0, MAP_SIZE, PROT_READ, MAP_SHARED, fd, GPIO_BASE);
+	if(map_base == (void *) -1) exit(255);
+
+	switch(gpio_read(map_base,98))
+	{
+		case 0: /* lid is closed */
+			retval = LID_CLOSED;
+			break;
+
+		case 1: /* lid is open */
+			retval = LID_OPEN;
+			break;
+
+		default:
+			retval = LID_UNKNOWN;
+	}
+
+	if(munmap(map_base, MAP_SIZE) == -1) exit(255) ;
+	close(fd);
+	return retval;
+}
 
 int keys_on() {	//turns backlight power on or off
 
@@ -252,17 +304,8 @@ int main (int argc, char **argv)
 			exit(3);
 		}
 
-		/* Get lid status */
-		int lidstat = 255;
-		FILE *lid = fopen("/tmp/lidstate", "r");
-		if ( lid != NULL ) {
-			char buf [5];
-			lidstat = atoi(fgets(buf, sizeof buf, lid));
-			fclose(lid);
-		}
-
 		/* Do nothing if lid is closed */
-		if ( lidstat != 0 ) {
+		if ( lidstate() != 0 ) {
 			/* write the key press/release to uinput */
 			write(ufile, &ievent, sizeof(struct input_event));
 
