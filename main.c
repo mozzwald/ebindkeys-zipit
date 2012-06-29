@@ -48,6 +48,9 @@ int gpio_read(void *map_base, int gpio) {
 	return (*reg >> (gpio&31)) & 1;
 }
 
+#define EBK_KEY_UP 		0
+#define EBK_KEY_DOWN 	1
+
 #define LID_CLOSED  0
 #define LID_OPEN    1
 #define LID_UNKNOWN 255
@@ -81,7 +84,7 @@ int lidstate() {
 	return retval;
 }
 
-int keys_on() {	//turns backlight power on or off
+void keys_on() {	//turns backlight power on or off
 
 	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
 
@@ -105,6 +108,344 @@ void onKeyPress() {	//reset timer in /tmp/keytimer
 	//now turn on the lights
 	keys_on();
 
+}
+
+
+#define EMU_NAME_KBD "ebindkeys-kdb"
+#define EMU_NAME_MOUSE "ebindkeys-mouse"
+
+int openUInput(int *ufile, int *ufile_mouse, int *eventfh, const char* device){
+
+	if (! (*eventfh = open(device , O_RDONLY )))
+	{
+		fprintf(stderr, "Error opening event device %s", device);
+		return 0;
+	}
+
+	/* Get exclusive access to the input device so we
+	 * can ignore keypresses when lid is closed */
+	int result = 0;
+	char name[256] = "Unknown";
+
+	result = ioctl(*eventfh, EVIOCGNAME(sizeof(name)), name);
+	result = ioctl(*eventfh, EVIOCGRAB, 1);
+
+	/* Setup uinput device for writing */
+	int res;
+	struct uinput_user_dev uinp;
+	*ufile = open("/dev/input/uinput", O_WRONLY);
+	if (*ufile == -1)
+		*ufile = open("/dev/uinput", O_WRONLY);
+	if (*ufile == -1)
+	{
+		fprintf(stderr, "Error opening uinput device! Is the uinput module loaded?");
+		return 0;
+	}
+	
+	
+
+	*ufile_mouse = open("/dev/input/uinput", O_WRONLY);
+	if (*ufile_mouse == -1)
+		*ufile_mouse = open("/dev/uinput", O_WRONLY);
+	if (*ufile_mouse == -1)
+	{
+		fprintf(stderr, "Error opening uinput mouse device! Is the uinput module loaded?");
+		return 0;
+	}
+	
+	ioctl(*ufile, UI_SET_EVBIT, EV_KEY);
+	ioctl(*ufile, UI_SET_EVBIT, EV_REL);
+	for (int i = 0; i < KEY_MAX; i++)
+		ioctl(*ufile, UI_SET_KEYBIT, i);
+
+
+	/* Mouse events for mouse device */
+	ioctl(*ufile_mouse, UI_SET_EVBIT, EV_KEY);
+	ioctl(*ufile_mouse, UI_SET_EVBIT, EV_REL);
+	ioctl(*ufile_mouse, UI_SET_RELBIT, REL_X);
+	ioctl(*ufile_mouse, UI_SET_RELBIT, REL_Y);
+	ioctl(*ufile_mouse, UI_SET_KEYBIT, BTN_MOUSE);
+	ioctl(*ufile_mouse, UI_SET_KEYBIT, BTN_LEFT);
+	ioctl(*ufile_mouse, UI_SET_KEYBIT, BTN_RIGHT);
+	ioctl(*ufile_mouse, UI_SET_KEYBIT, BTN_MIDDLE);
+
+
+	memset(&uinp, 0, sizeof(uinp));
+	uinp.id.version = 1;
+	uinp.id.bustype = BUS_USB;
+	strncpy(uinp.name, EMU_NAME_KBD, sizeof(EMU_NAME_KBD));
+//	strncpy(uinp.name, UINPUT_DEV_NAME, sizeof(UINPUT_DEV_NAME));
+	res = write(*ufile, &uinp, sizeof(uinp));
+	if (res == -1)
+	{
+		fprintf(stderr, "Error setting up uinput device!");
+		return 0;
+	}
+
+	memset(&uinp, 0, sizeof(uinp));
+	uinp.id.version = 4;
+	uinp.id.bustype = BUS_USB;
+	strncpy(uinp.name, EMU_NAME_MOUSE, sizeof(EMU_NAME_MOUSE));
+	res = write(*ufile_mouse, &uinp, sizeof(uinp));
+	if (res == -1)
+	{
+		fprintf(stderr, "Error setting up uinput mouse device!");
+		return 0;
+	}
+
+
+
+	if (ioctl(*ufile, UI_DEV_CREATE) < 0)
+	{
+		fprintf(stderr, "Error creating uinput device!");
+		return 0;
+	}
+
+	if (ioctl(*ufile_mouse, UI_DEV_CREATE) < 0)
+	{
+		fprintf(stderr, "Error creating uinput device!");
+		return 0;
+	}
+	
+	return 1;
+}
+
+
+
+int send_event(int ufile, __u16 type, __u16 code, __s32 value)
+{
+	struct input_event event;
+
+	memset(&event, 0, sizeof(event));
+	event.type = type;
+	event.code = code;
+	event.value = value;
+
+	if (write(ufile, &event, sizeof(event)) != sizeof(event)) {
+		printf("Error during event sending");
+		return -1;
+	}
+
+	return 0;
+}
+
+
+#define MAX_ACCEL 24
+#define ACCEL_DIVIDOR 3
+
+int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
+{
+	int dx=0; 
+	int dy=0;
+	static int moving, accel;
+
+	uint32_t code;
+	int bEventHandled = 1;
+	
+	switch(pEvent->code){
+
+		case KEY_UP:
+
+			if (pEvent->value == 0)
+				moving--;
+			else {//if (pEvent->value == 1)
+				moving++;
+				dy=-1;
+			}
+			break;
+
+		case KEY_DOWN:
+			if (pEvent->value == 0)
+				moving--;
+			else{//if (pEvent->value == 1)
+				moving++;
+				dy=1;
+			}
+			break;
+			
+		case KEY_RIGHT:
+			if (pEvent->value == 0)
+				moving--;
+			else{//if (pEvent->value == 1)
+				moving++;
+				dx=1;
+			}
+			break;
+			
+		case KEY_LEFT:
+			if (pEvent->value == 0)
+				moving--;
+			else{//if (pEvent->value == 1)
+				moving++;
+				dx=-1;
+			}
+			break;
+			
+		case KEY_END: //} else if (pEvent->code == lbutton_code {
+			send_event(ufile_mouse, EV_KEY, BTN_LEFT, pEvent->value);
+			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
+			break;
+			
+		case KEY_STOPCD: //} else if (pEvent->code == rbutton_code) {
+			send_event(ufile_mouse, EV_KEY, BTN_RIGHT, pEvent->value);
+			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
+			break;
+			
+		case KEY_PLAYCD: //} else if (pEvent->code == mbutton_code) {
+			send_event(ufile_mouse, EV_KEY, BTN_MIDDLE, pEvent->value);
+			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
+			break;
+	
+		default:
+			bEventHandled = 0;	
+			
+			
+	}
+
+	
+	/* Clamp value */
+	moving = moving < 0 ? 0 : moving;
+	moving = moving > 4 ? 4 : moving;
+
+	if (moving) {
+		if (accel < MAX_ACCEL)
+			accel++;
+
+		send_event(ufile_mouse, EV_REL, REL_X, dx * (1 + accel / ACCEL_DIVIDOR));
+		send_event(ufile_mouse, EV_REL, REL_Y, dy * (1 + accel / ACCEL_DIVIDOR));
+		send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
+	} else
+		accel = 0;
+	
+	return bEventHandled;
+}
+
+static int bProcessMouse = 0;
+static int bTempProcessMouse = 0;
+
+int filterKeyStroke(int ufile, int ufile_mouse, const struct input_event const* pEvent, int bExperiment)
+{
+	/* this function determines if this keystroke shouild be eaten, injected with alternate keystrokes,
+		or just passed on to the rest of the system (i.e. the keymap)	*/
+
+	int bFiltered = 1;
+	bTempProcessMouse = 0;
+	
+	struct input_event 	ievent = *pEvent;
+
+	switch(pEvent->code){
+//	case KEY_POWER:
+
+	case KEY_OPTION:
+		if(bExperiment){
+			//send the <ctrl> keystroke
+			ievent.code = KEY_LEFTCTRL;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			//send the <alt> keystroke
+			ievent.code = KEY_LEFTALT;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			//send the <F1> keystroke -- it should be assigned to the Home btn in the keymap
+			ievent.code = KEY_HOME;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+
+	/********  need to send the Key_Up codes to complete the sequence  ******/
+			ievent.value = EBK_KEY_UP; //KEY_UP
+
+			//send the <F1> keystroke
+			ievent.code = KEY_HOME;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			//send the <ctrl> keystroke
+			ievent.code = KEY_LEFTCTRL;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			//send the <alt> keystroke
+			ievent.code = KEY_LEFTALT;
+			write(ufile, &ievent, sizeof(struct input_event));
+		}
+		else
+			bProcessMouse = !bProcessMouse;
+			bFiltered = 0;
+		break;
+
+	case KEY_LEFTCTRL:
+		bTempProcessMouse = 1;
+		bFiltered = 0;
+		
+		break;
+
+	case KEY_HOME:
+		/* 	*****    do not write the event    ******
+			the Home btn should be assigned to F1 in the Keymap
+			however, we do not want this keystroke to be called when the button is pressed,
+			instead we are only interested in what function ebindkeys would like to run */
+		break;
+
+	default:
+		bFiltered = 0;
+	}
+
+
+//	if(!bFiltered && (bProcessMouse || bTempProcessMouse))
+//		bFiltered = process_mouse_event(ufile_mouse, pEvent);
+
+	return bFiltered;
+}
+
+void Match_keysToEvent(key_press* list_start, const event* event_first, int DoNotFork, cfg_bool_t bOnRelease)
+//while ( event_cur != NULL && !event_cur->bindToReleaseEvent) /* cycle through all events in the config file*/
+{
+	int count = list_len(list_start);
+	const event* event_cur = event_first;
+	key_press* list_cur;
+
+	while ( event_cur->next != NULL ) //cycle through all events in the config file
+	{
+		/* don't bother matching keys if the key count doesn't match
+		 * the keys pressed count */
+
+
+		if (bOnRelease == event_cur->bindToReleaseEvent && count == event_cur->key_count)
+		{
+			int j = 0; /* set flag to 0 */
+
+			/* cycle through all the keys for event_cur */
+			for ( int i=0; i < event_cur->key_count; i++)
+			{
+				list_cur = list_start;
+
+				/* check this event's keys to all currently pressed keys */
+				while(list_cur->next != NULL)
+				{
+					if ( event_cur->keys[i] == list_cur->code )
+						j++;
+					list_cur = list_cur->next;
+				}
+			}
+			if (j == event_cur->key_count)
+			{
+				if (!strcmp(event_cur->action, "TOGGLE"))
+					active ^= 1;
+				else if (active)
+				{
+				/* we have a go. fork and run the action */
+					if(DoNotFork)
+						system(event_cur->action);
+					else if (!fork())
+					{
+						system(event_cur->action);
+						exit(0);
+					}
+
+				}
+			}
+		}
+
+		event_cur = event_cur->next;
+	}
 }
 
 /* reference:
@@ -141,6 +482,7 @@ Auto Repeat 2
 
  */
 
+
 int main (int argc, char **argv)
 {
 	/* generic purpose counter */
@@ -157,7 +499,7 @@ int main (int argc, char **argv)
 	sprintf(conf_file, "%s/.ebindkeysrc", getenv("HOME"));
 
 	/* work through command line options */
-	while( (ch = getopt(argc, argv, "f:dslrhn:")) != -1)
+	while( (ch = getopt(argc, argv, "f:dslrhne:")) != -1)
 	{
 		switch (ch)
 		{
@@ -189,6 +531,9 @@ int main (int argc, char **argv)
 				break;
 			case 'h':
 				break;
+			case 'e':
+				cmd_opts |= EBK_EXPERIMENTAL;
+				break;
 			/*default:
 				printf("Usage: %s [options]\n", argv[0]);
 				exit(1);
@@ -207,8 +552,12 @@ int main (int argc, char **argv)
 		{
 			fprintf(stderr, "%s: could not open config file %s\n", argv[0], conf_file);
 			exit(2);
-		} else fclose(conf_check);
-	} else fclose(conf_check);
+		}
+		else fclose(conf_check);
+
+	}
+	else fclose(conf_check);
+
 	printf("%s: Loaded config file %s\n", argv[0], conf_file);
 
 	settings *conf = load_settings(conf_file);
@@ -222,7 +571,6 @@ int main (int argc, char **argv)
 		conf->dev = devnode;
 
 	event *event_first = conf->event_first;
-	event *event_cur = event_first;
 
 	event_list_global = &event_first;
 
@@ -238,50 +586,12 @@ int main (int argc, char **argv)
 
 	/* No buffering, for now. */
 	int eventfh;
-	if (! (eventfh = open(conf->dev , O_RDONLY )))
-	{
-		fprintf(stderr, "%s: Error opening event device %s", argv[0], conf->dev);
-		exit(3);
-	}
+	int ufile;
+	int ufile_mouse;
 
-	/* Get exclusive access to the input device so we
-	 * can ignore keypresses when lid is closed */
-	int result = 0;
-	char name[256] = "Unknown";
-
-	result = ioctl(eventfh, EVIOCGNAME(sizeof(name)), name);
-	result = ioctl(eventfh, EVIOCGRAB, 1);
-
-	/* Setup uinput device for writing */
-	int ufile, res;
-	struct uinput_user_dev uinp;
-	ufile = open("/dev/input/uinput", O_WRONLY);
-	if (ufile == -1)
-		ufile = open("/dev/uinput", O_WRONLY);
-	if (ufile == -1)
-	{
-		fprintf(stderr, "Error opening uinput device! Is the uinput module loaded?");
+	/* open uinput for exclusive access to the input device  */
+	if(!openUInput(&ufile, &ufile_mouse, &eventfh, conf->dev))
 		exit(3);
-	}
-	ioctl(ufile, UI_SET_EVBIT, EV_KEY);
-	ioctl(ufile, UI_SET_EVBIT, EV_REL);
-	for (i = 0; i < KEY_MAX; i++)
-		ioctl(ufile, UI_SET_KEYBIT, i);
-	memset(&uinp, 0, sizeof(uinp));
-	uinp.id.version = 1;
-	uinp.id.bustype = BUS_USB;
-	strncpy(uinp.name, UINPUT_DEV_NAME, sizeof(UINPUT_DEV_NAME));
-	res = write(ufile, &uinp, sizeof(uinp));
-	if (res == -1)
-	{
-		fprintf(stderr, "Error setting up uinput device!");
-		exit(3);
-	}
-	if (ioctl(ufile, UI_DEV_CREATE) < 0)
-	{
-		fprintf(stderr, "Error creating uinput device!");
-		exit(3);
-	}
 
 	/* How does a good parent prevent his children from becoming
 	 * part of the zombie hoard? He ignores them! */
@@ -291,6 +601,7 @@ int main (int argc, char **argv)
 
 	if ( ! ( ISSET(conf->opts, EBK_NODAEMON) ) )
 		if (fork()) exit(0);
+
 
 	for(;;)
 	{
@@ -305,16 +616,30 @@ int main (int argc, char **argv)
 		}
 
 		/* Do nothing if lid is closed */
-		if ( lidstate() != 0 ) {
-			/* write the key press/release to uinput */
-			write(ufile, &ievent, sizeof(struct input_event));
+		if ( lidstate() != LID_CLOSED ) {
 
+			int bFiltered = 0;
+
+			if(bProcessMouse || bTempProcessMouse){
+				bFiltered = process_mouse_event(ufile_mouse, &ievent);
+					if(bFiltered) continue;
+			}
 			/* Key has been pressed */
-			if ( ievent.type == EV_KEY &&
-				 ievent.value == 1 )
-				{
+			if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_DOWN )
+			{
+					if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
+						printf(">%X<\n", ievent.code);
+						fflush(stdout);
+					}
+
 					/*reset the keyboard timer and turn on the lights */
 					onKeyPress();
+
+					/* if no other keys are pressed, filter the keystroke */
+					if(list_start->next == NULL)
+						bFiltered = filterKeyStroke(ufile, ufile_mouse, &ievent, ISSET(conf->opts, EBK_EXPERIMENTAL));
+
+			//		if(bFiltered) continue;
 
 					/* add to depressed struct */
 					list_end->code = ievent.code;
@@ -322,100 +647,66 @@ int main (int argc, char **argv)
 					list_end = list_end->next;
 					list_end->next = NULL;
 
-					/* check if we've hit a combo here */
+					Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_false);
+			}
 
-					count = list_len(list_start);
-					event_cur = event_first;
-					while ( event_cur->next != NULL ) /* cycle through all events */
-					{
-						/* don't bother matching keys if the key count doesn't match
-						 * the keys pressed count */
-						if ( count == event_cur->key_count)
-						{
-							j = 0; /* set flag to 0 */
-
-							/* cycle through all the keys for event_cur */
-							for ( i=0; i < event_cur->key_count; i++)
-							{
-								list_cur = list_start;
-
-								/* check this event's keys to all currently pressed keys */
-								while(list_cur->next != NULL)
-								{
-									if ( event_cur->keys[i] == list_cur->code )
-										j++;
-									list_cur = list_cur->next;
-								}
-							}
-							if (j == event_cur->key_count)
-							{
-								if (!strcmp(event_cur->action, "TOGGLE"))
-									active ^= 1;
-								else if (active) {
-								/* we have a go. fork and run the action */
-									if ( ISSET(conf->opts, EBK_NOFORK) )
-										system(event_cur->action);
-									else
-										if (!fork())
-										{
-											system(event_cur->action);
-											exit(0);
-										};
-									}
-							}
-						}
-
-						event_cur = event_cur->next;
-					}
-					if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
-						printf(">%X<\n", ievent.code);
-						fflush(stdout);
-					}
-				}
 			/* Key has been released */
-			if ( ievent.type == EV_KEY &&
-				 ievent.value == 0 )
+			if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_UP )
+			{
+				if ( ISSET(conf->opts,EBK_SHOWKEYS) )
 				{
-					/* remove from depressed struct */
-					list_cur = list_start;
-					list_prev = NULL;
-					while (list_cur->code != ievent.code && list_cur->next != NULL)
-					{
-						list_prev = list_cur;
-						list_cur = list_cur->next;
-					}
-
-					/* if the bellow is true, most likely, a key was released
-					 * but ebindkeys didn't detect the press */
-					if (list_cur->next == NULL)
-						continue;
-
-
-					if (list_prev == NULL)
-					{
-						/* no previous? we're at start! */
-						list_start = list_cur->next;
-					}
-					else
-					{
-						list_prev->next = list_cur->next;
-					}
-
-					free(list_cur);
-
-					if ( ISSET(conf->opts,EBK_SHOWKEYS) )
-					{
 						printf("<%X>\n", ievent.code);
 						fflush(stdout);
-					}
-
 				}
+
+				Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_true);
+
+				/* remove from depressed struct */
+				list_cur = list_start;
+				list_prev = NULL;
+
+				while (list_cur->code != ievent.code && list_cur->next != NULL)
+				{
+					list_prev = list_cur;
+					list_cur = list_cur->next;
+				}
+
+				/* if the bellow is true, most likely, a key was released
+				 * but ebindkeys didn't detect the press */
+				if (list_cur->next == NULL)
+					continue;
+
+
+				if (list_prev == NULL)
+				{
+					/* no previous? we're at start! */
+					list_start = list_cur->next;
+				}
+				else
+				{
+					list_prev->next = list_cur->next;
+				}
+
+				free(list_cur);
+			
+				if(ievent.code == KEY_LEFTCTRL)
+					bTempProcessMouse=0;
+			}
+			
+			if(!bFiltered)
+				write(ufile, &ievent, sizeof(struct input_event));
 		}
 	}
 
+	if(ioctl(ufile, UI_DEV_DESTROY) < 0)
+        fprintf(stderr, "Error destroying uinput device!");
+
+	if(ioctl(ufile_mouse, UI_DEV_DESTROY) < 0)
+        fprintf(stderr, "Error destroying uinput device!");
+
 	close(eventfh);
 	close(ufile);
-
+	close(ufile_mouse);
 	return 0;
 }
 
@@ -438,6 +729,7 @@ settings *load_settings (const char *conffile)
 	{
 		CFG_INT_LIST("keys", "", CFGF_NONE),
 		CFG_STR("action", "", CFGF_NONE),
+		CFG_BOOL("onrelease", 0, CFGF_NONE),
 		CFG_END()
 	};
 
@@ -468,6 +760,10 @@ settings *load_settings (const char *conffile)
 		/* easy peasy, set the action */
 		event_cur->action = strdup(cfg_getstr(cfg_section, "action"));
 
+		/* set the bool that determines if the action should fire on press or release  */
+		/* if it's absent the value will be set to cfg_false */
+		event_cur->bindToReleaseEvent = cfg_getbool(cfg_section, "onrelease");
+
 		/* set key_count */
 		event_cur->key_count = cfg_size(cfg_section, "keys");
 
@@ -488,6 +784,16 @@ settings *load_settings (const char *conffile)
 		event_cur = event_cur->next;
 		event_cur->next = NULL;
 	}
+
+
+    /*
+	 //print the parsed values to another file
+    {
+        FILE *fp = fopen("/etc/ebindkeys.conf.out", "w");
+        cfg_print(cfg, fp);
+        fclose(fp);
+    }
+	*/
 
 	cfg_free(cfg);
 
