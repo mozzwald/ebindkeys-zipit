@@ -5,6 +5,7 @@
 #define EBK_NODAEMON 0x01
 #define EBK_NOFORK 0x02
 #define EBK_SHOWKEYS 0x04
+#define EBK_EXPERIMENTAL 0x08
 
 #define ISSET(a,b) (a & b) == b
 
@@ -18,6 +19,7 @@ typedef struct {
 	unsigned short *keys;
 	unsigned short key_count;
 	char *action;
+	cfg_bool_t bindToReleaseEvent;
 	void *next;
 } event;
 
