@@ -1,0 +1,4 @@
+#!/bin/sh
+# runs a shell script as backgroud process
+
+/bin/sh -c "$1" &

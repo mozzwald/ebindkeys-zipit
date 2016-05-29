@@ -127,44 +127,6 @@ int powerstate() {
 /* Thread for backlight daemon */
 pthread_t bldaemon;
 
-/* Thread for watching power button events */
-pthread_t get_pwrpressed;
-int wasPwrPressed = 0;
-pthread_mutex_t pwrlock;
-static int evpwrfd;
-
-void* GetPwrPressed(void *arg) {
-	ssize_t n;
-	struct input_event ev;
-	
-    while (1) {
-        n = read(evpwrfd, &ev, sizeof ev);
-        if (n == (ssize_t)-1) {
-            if (errno == EINTR)
-                continue;
-            else
-                break;
-        } else
-        if (n != sizeof ev) {
-            errno = EIO;
-            break;
-        }
-
-//		if (ev.type == EV_KEY && ev.value >= 0 && ev.value <= 2){
-		/* Only catch key release event, not press */
-		if (ev.type == EV_KEY && ev.value == EBK_KEY_UP){
-			pthread_mutex_lock(&pwrlock);
-			wasPwrPressed = 1;
-			pthread_mutex_unlock(&pwrlock);
-        }
-
-    }
-    fflush(stdout);
-    fprintf(stderr, "%s.\n", strerror(errno));
-
-	return NULL;
-}
-
 #define EMU_NAME_KBD "ebindkeys-kdb"
 #define EMU_NAME_MOUSE "ebindkeys-mouse"
 
@@ -832,11 +794,7 @@ void* bldaemonLoop()
 				keyb(conf->dimkeyb);	//and dim lights
 			}
 		}
-		/* Run command if power button was pressed and lid open */
-		if ( wasPwrPressed && lid){
-			wasPwrPressed = 0;
-			system(conf->pwrcmd);
-		}
+		sleep(1);
 	}
 }
 
@@ -961,15 +919,21 @@ int main (int argc, char **argv)
 	if ( ! ( ISSET(conf->opts, EBK_NODAEMON) ) )
 		if (fork()) exit(0);
 
-	/* run thread to watch power button presses */
+	/* Setup file descriptor to watch power button presses */
+	ssize_t n;
+	struct input_event evpwr;
+	int evpwrfd;
+
 	evpwrfd = open(conf->pwrdev, O_RDONLY);
 	if (evpwrfd == -1) {
 		fprintf(stderr, "Cannot open pwrbttn fd %s: %s.\n", conf->pwrdev, strerror(errno));
 		exit(255);
 	}
-	pthread_mutex_init(&pwrlock, NULL);
-	pthread_create(&get_pwrpressed, NULL, &GetPwrPressed, NULL);
 
+	/* Setup the file descriptor set for select() */
+	fd_set ebkfds;
+	int input_detect;
+	
 	/*
 	 * Begin backlight daemon setup
 	 */
@@ -999,107 +963,146 @@ int main (int argc, char **argv)
 	
 	for(;;)
 	{
-		if ( read(eventfh, &ievent, sizeof(struct input_event)) == -1 )
+		/* Reset our file descriptor set */
+		FD_ZERO(&ebkfds);
+        FD_SET(eventfh, &ebkfds);
+        FD_SET(evpwrfd, &ebkfds);
+		
+		/* Watch both pwr bttn and keyboard file descriptors for input
+		 * then read and do something for each
+		 */
+		input_detect = select( FD_SETSIZE , &ebkfds , NULL , NULL , NULL);
+        if ((input_detect < 0) && (errno!=EINTR)) 
+        {
+            fprintf(stderr, "select error\n");
+        }
+		if (FD_ISSET(eventfh, &ebkfds))
 		{
-			/* read() will always get sizeof(struct input_event) number
-			 * of bytes, the kernel gurantees this, so we only worry
-			 * about reads error. 
-			*/
-			/* backlight timers throw SIGUSR which interrupt our read.
-			 * Catch these (error # 4) and continue with our loop */
-			readErr = errno;
-			if(readErr != 4){
-				fprintf(stderr, "Error reading keyboard input device: %d\n", readErr);
-				exit(3);
-			}
-		}else{ readErr = 0; }
-
-		/* Do nothing with keyboard input if lid is closed or if there's a read error */
-		if ( lidstate() != LID_CLOSED  || !readErr) {
-			
-			int bFiltered = 0;
-
-			if(bProcessMouse || bTempProcessMouse){
-				bFiltered = process_mouse_event(ufile_mouse, &ievent);
-					if(bFiltered) continue;
-			}
-			/* Key has been pressed */
-			if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_DOWN )
+			//fprintf(stderr, "Event on keyboard\n");
+			if ( read(eventfh, &ievent, sizeof(struct input_event)) == -1 )
 			{
-					if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
-						printf(">%X<\n", ievent.code);
-						fflush(stdout);
+				readErr = errno;
+				if(readErr != 4){
+					fprintf(stderr, "Error reading keyboard input device: %d\n", readErr);
+					exit(3);
+				}
+			}else{ readErr = 0; }
+
+			/* Do nothing with keyboard input if lid is closed or if there's a read error */
+			if ( lidstate() != LID_CLOSED  || !readErr) {
+				
+				int bFiltered = 0;
+	
+				if(bProcessMouse || bTempProcessMouse){
+					bFiltered = process_mouse_event(ufile_mouse, &ievent);
+						if(bFiltered) continue;
+				}
+				/* Key has been pressed */
+				if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_DOWN )
+				{
+						if ( ISSET(conf->opts, EBK_SHOWKEYS) ) {
+							printf(">%X<\n", ievent.code);
+							fflush(stdout);
+						}
+	
+						/* reset the timers and turn on the lights
+						 * only if we are on battery */
+						if(!powerstate()){
+							set_timer(keys_timerid, conf->keytimeout);
+							set_timer(lcd_timerid, conf->lcdtimeout);
+							screenOn();
+							keysOn();
+						}
+	
+						/* if no other keys are pressed, filter the keystroke */
+						if(list_start->next == NULL)
+							bFiltered = filterKeyStroke(ufile, ufile_mouse, &ievent, ISSET(conf->opts, EBK_EXPERIMENTAL));
+	
+				//		if(bFiltered) continue;
+	
+						/* add to depressed struct */
+						list_end->code = ievent.code;
+						list_end->next = calloc(1,sizeof(key_press));
+						list_end = list_end->next;
+						list_end->next = NULL;
+	
+						Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_false);
+				}
+	
+				/* Key has been released */
+				if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_UP )
+				{
+					if ( ISSET(conf->opts,EBK_SHOWKEYS) )
+					{
+							printf("<%X>\n", ievent.code);
+							fflush(stdout);
 					}
-
-					/* reset the timers and turn on the lights
-					 * only if we are on battery */
-					if(!powerstate()){
-						set_timer(keys_timerid, conf->keytimeout);
-						set_timer(lcd_timerid, conf->lcdtimeout);
-						screenOn();
-						keysOn();
+	
+					Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_true);
+	
+					/* remove from depressed struct */
+					list_cur = list_start;
+					list_prev = NULL;
+	
+					while (list_cur->code != ievent.code && list_cur->next != NULL)
+					{
+						list_prev = list_cur;
+						list_cur = list_cur->next;
 					}
-
-					/* if no other keys are pressed, filter the keystroke */
-					if(list_start->next == NULL)
-						bFiltered = filterKeyStroke(ufile, ufile_mouse, &ievent, ISSET(conf->opts, EBK_EXPERIMENTAL));
-
-			//		if(bFiltered) continue;
-
-					/* add to depressed struct */
-					list_end->code = ievent.code;
-					list_end->next = calloc(1,sizeof(key_press));
-					list_end = list_end->next;
-					list_end->next = NULL;
-
-					Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_false);
+	
+					/* if below is true, most likely, a key was released
+					 * but ebindkeys didn't detect the press */
+					if (list_cur->next == NULL)
+						continue;
+	
+	
+					if (list_prev == NULL)
+					{
+						/* no previous? we're at start! */
+						list_start = list_cur->next;
+					}
+					else
+					{
+						list_prev->next = list_cur->next;
+					}
+	
+					free(list_cur);
+				
+					if(ievent.code == KEY_LEFTCTRL)
+						bTempProcessMouse=0;
+				}
+				
+				if(!bFiltered)
+					write(ufile, &ievent, sizeof(struct input_event));
 			}
-
-			/* Key has been released */
-			if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_UP )
-			{
-				if ( ISSET(conf->opts,EBK_SHOWKEYS) )
-				{
-						printf("<%X>\n", ievent.code);
-						fflush(stdout);
-				}
-
-				Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_true);
-
-				/* remove from depressed struct */
-				list_cur = list_start;
-				list_prev = NULL;
-
-				while (list_cur->code != ievent.code && list_cur->next != NULL)
-				{
-					list_prev = list_cur;
-					list_cur = list_cur->next;
-				}
-
-				/* if the bellow is true, most likely, a key was released
-				 * but ebindkeys didn't detect the press */
-				if (list_cur->next == NULL)
+		}
+		else if (FD_ISSET(evpwrfd, &ebkfds))
+		{
+			//fprintf(stderr, "Event on pwr button\n");
+			n = read(evpwrfd, &evpwr, sizeof evpwr);
+			if (n == (ssize_t)-1) {
+				if (errno == EINTR)
 					continue;
-
-
-				if (list_prev == NULL)
-				{
-					/* no previous? we're at start! */
-					list_start = list_cur->next;
-				}
 				else
-				{
-					list_prev->next = list_cur->next;
-				}
-
-				free(list_cur);
-			
-				if(ievent.code == KEY_LEFTCTRL)
-					bTempProcessMouse=0;
+					break;
+			} else
+			if (n != sizeof evpwr) {
+				errno = EIO;
+				break;
 			}
-			
-			if(!bFiltered)
-				write(ufile, &ievent, sizeof(struct input_event));
+			/* Only catch key release event, otherwise it tries to run twice */
+			if (evpwr.type == EV_KEY && evpwr.value == EBK_KEY_UP){
+				if( lidstate() != LID_CLOSED ){
+					char ebkFork[99];
+					sprintf(ebkFork, "/usr/sbin/ebkfork \"%s\"", conf->pwrcmd);
+					//fprintf(stderr, "Run command: %s\n", ebkFork);
+					system(ebkFork);
+				}
+			}
+		}
+		else
+		{
+			fprintf(stderr, "FD_SET Input Event error\n");
 		}
 	}
 
