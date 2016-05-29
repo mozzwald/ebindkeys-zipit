@@ -1,7 +1,8 @@
 /*
-	Keyboard shortcut daemon.
-	Via evdev module (/dev/input/eventX)
-*/
+ *	Formerly ebindkeys and bldaemon-zipit, now a combination of both
+ *	for the Zipit Z2.
+ *
+ */
 
 #define _GNU_SOURCE
 #define _XOPEN_SOURCE
@@ -25,13 +26,18 @@
 #include <linux/uinput.h>
 #include <inttypes.h>
 #include <sys/mman.h>
+#include <errno.h>
+#include <pthread.h>
+#include <assert.h>
+#include <time.h>
 
 #include "confuse.h"
 #include "ebindkeys.h"
 
-#define MAP_SIZE 4096UL
+/* Define global config variable */
+settings *conf;
 
-#define GPIO 98	/* lid switch */
+#define MAP_SIZE 4096UL
 #define GPIO_BASE 0x40E00000 /* PXA270 GPIO Register Base */
 
 typedef unsigned long u32;
@@ -54,6 +60,10 @@ int gpio_read(void *map_base, int gpio) {
 #define LID_CLOSED  0
 #define LID_OPEN    1
 #define LID_UNKNOWN 255
+#define PWR_BATTERY 0
+#define PWR_AC_CORD 1
+#define PWR_UNKNOWN 255
+
 int lidstate() {
 	int fd;
 	int retval;
@@ -84,32 +94,76 @@ int lidstate() {
 	return retval;
 }
 
-void keys_on() {	//turns backlight power on or off
+int powerstate() {
+        int fd;
+        int retval;
+        void *map_base;
 
-	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
+        fd = open("/dev/mem", O_RDONLY | O_SYNC);
+        if (fd < 0) {printf("Please run as root\n"); exit(1);}
 
-	//WARNING: opposite of what you might expect - 1 is off and 0 is on
-	if (key != NULL) {
-		fputs("0", key);
-		fclose(key);
-	}
+        map_base = mmap(0, MAP_SIZE, PROT_READ, MAP_SHARED, fd, GPIO_BASE);
+        if(map_base == (void *) -1) exit(255);
+
+        switch(gpio_read(map_base,0))
+        {
+                case 0: /* battery */
+                    retval = PWR_BATTERY;
+					break;
+
+                case 1: /* mains */
+                    retval = PWR_AC_CORD;
+                    break;
+
+                default:
+					retval = PWR_UNKNOWN;
+        }
+
+        if(munmap(map_base, MAP_SIZE) == -1) exit(255) ;
+        close(fd);
+        return retval;
 }
 
+/* Thread for backlight daemon */
+pthread_t bldaemon;
 
-void onKeyPress() {	//reset timer in /tmp/keytimer
+/* Thread for watching power button events */
+pthread_t get_pwrpressed;
+int wasPwrPressed = 0;
+pthread_mutex_t pwrlock;
+static int evpwrfd;
 
-	FILE *key = fopen("/tmp/keypressed", "w");
+void* GetPwrPressed(void *arg) {
+	ssize_t n;
+	struct input_event ev;
+	
+    while (1) {
+        n = read(evpwrfd, &ev, sizeof ev);
+        if (n == (ssize_t)-1) {
+            if (errno == EINTR)
+                continue;
+            else
+                break;
+        } else
+        if (n != sizeof ev) {
+            errno = EIO;
+            break;
+        }
 
-	if (key != NULL) {
-		fputs("1", key);
-		fclose(key);
-	}
+//		if (ev.type == EV_KEY && ev.value >= 0 && ev.value <= 2){
+		/* Only catch key release event, not press */
+		if (ev.type == EV_KEY && ev.value == EBK_KEY_UP){
+			pthread_mutex_lock(&pwrlock);
+			wasPwrPressed = 1;
+			pthread_mutex_unlock(&pwrlock);
+        }
 
-	//now turn on the lights
-	keys_on();
+    }
+    fflush(stdout);
+    fprintf(stderr, "%s.\n", strerror(errno));
 
+	return NULL;
 }
-
 
 #define EMU_NAME_KBD "ebindkeys-kdb"
 #define EMU_NAME_MOUSE "ebindkeys-mouse"
@@ -302,7 +356,6 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 			
 	}
 
-	
 	/* Clamp value */
 	moving = moving < 0 ? 0 : moving;
 	moving = moving > 4 ? 4 : moving;
@@ -482,6 +535,310 @@ Auto Repeat 2
 
  */
 
+/* Backlight daemon control functions */
+char keybuf[99];
+char scrbuf[99];
+
+int lightswitch(int onoroff) {	//turns backlight power on or off
+	sprintf(scrbuf, "%s%s", conf->scrbfile, "bl_power");
+	FILE *scr = fopen(scrbuf, "w");
+	sprintf(keybuf, "%s%s", conf->keybfile, "bl_power");
+	FILE *key = fopen(keybuf, "w");
+	int success;
+	if (scr != NULL && key != NULL) {
+		char buf [5];
+		sprintf(buf, "%i", (onoroff == 0?1:0));
+		fputs(buf, scr);
+		fputs(buf, key);
+		fclose(scr);
+		fclose(key);
+		success = 1;
+	} else {
+	success = 0;
+	}
+	return success;
+}
+
+int lcdb(int scrbr) {	//set screen to given brightness
+	sprintf(scrbuf, "%s%s", conf->scrbfile, "brightness");
+	FILE *scr = fopen(scrbuf, "w");
+
+	int success;
+	if (scr != NULL) {
+		char scrbuf [5];
+		sprintf(scrbuf, "%i", scrbr);
+		fputs(scrbuf, scr);
+		fclose(scr);
+		success = 1;
+	} else {
+	success = 0;
+	}
+	return success;
+}
+
+int keyb(int keybr) {	//set keyboard to given brightness
+	sprintf(keybuf, "%s%s", conf->keybfile, "brightness");
+	FILE *key = fopen(keybuf, "w");
+
+	int success;
+	if (key != NULL) {
+		char keybuf [5];
+		sprintf(keybuf, "%i", keybr);
+		fputs(keybuf, key);
+		fclose(key);
+		success = 1;
+	} else {
+	success = 0;
+	}
+	return success;
+}
+
+int getscrb(void) {	//return current brightness of screen
+	sprintf(scrbuf, "%s%s", conf->scrbfile, "brightness");
+	FILE *scr = fopen(scrbuf, "r");
+
+	int scrbr;
+	if (scr != NULL) {
+		char buf [5];
+		scrbr = atoi(fgets(buf, sizeof buf, scr));
+		fclose(scr);
+	}
+	return scrbr;
+}
+
+int getkeyb(void) {	//return current brightness of keyboard
+	sprintf(keybuf, "%s%s", conf->keybfile, "brightness");
+	FILE *key = fopen(keybuf, "r");
+
+	int keybr;
+	if (key != NULL) {
+		char buf [5];
+		keybr = atoi(fgets(buf, sizeof buf, key));
+		fclose(key);
+	}
+	return keybr;
+}
+
+/* Backlight daemon timers */
+#define CLOCKID CLOCK_MONOTONIC
+#define SIG SIGALRM
+#define KEYS_TIMER 		101
+#define LCD_TIMER  		201
+#define POWER_TIMER  	301
+#define POWER_TIMEOUT 	300 //30 secs
+
+//on --> 0  off --> 1
+#define KEYS_ON  0
+#define KEYS_OFF 1
+void keysOn() {	//turns backlight power on
+
+	sigset_t mask;
+	/* Block timer signal temporarily */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIG);
+	if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+
+	sprintf(keybuf, "%s%s", conf->keybfile, "bl_power");
+	FILE *key = fopen(keybuf, "w");
+
+	if (key != NULL) {
+		char buf [5];
+		sprintf(buf, "%i", KEYS_ON);
+		fputs(buf, key);
+		fclose(key);
+	}
+
+   /* Unlock the timer signal, so that timer notification can be delivered */
+   if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+}
+
+static inline void keysOff() {	//turns backlight power off
+	sprintf(keybuf, "%s%s", conf->keybfile, "bl_power");
+	FILE *key = fopen(keybuf, "w");
+
+	if (key != NULL) {
+		char buf [5];
+		sprintf(buf, "%i", KEYS_OFF);
+		fputs(buf, key);
+		fclose(key);
+	}
+}
+
+static timer_t keys_timerid = 0;
+static timer_t lcd_timerid = 0;
+static timer_t power_timerid = 0;
+
+static unsigned int bScreenOff = 0;
+
+static inline void screenOn(){
+	sigset_t mask;
+	/* Block timer signal temporarily */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIG);
+	if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+
+	if(bScreenOff){//turn it back on
+		FILE *fblank = fopen("/sys/class/graphics/fb0/blank", "w");
+		fputs("0", fblank);
+		fclose(fblank);
+		bScreenOff = 0;
+	}
+
+   /* Unlock the timer signal, so that timer notification nan be delivered */
+   if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+}
+	
+static inline void screenOff(){
+	FILE *fblank = fopen("/sys/class/graphics/fb0/blank", "w");
+	fputs("1", fblank);
+	fclose(fblank);
+	bScreenOff = 1;
+}
+
+static void onTimer(int sig, siginfo_t *si, void *uc)
+{
+	switch(si->si_int){
+		case KEYS_TIMER:
+			keysOff();
+			break;
+	
+		case LCD_TIMER:
+			screenOff();
+			break;
+
+		case POWER_TIMER:
+			system(conf->onpwrdown);
+		
+			break;
+
+		default:
+			break;
+	}
+}
+     
+timer_t create_timer(int timerName, unsigned int freq_msecs)
+{
+    struct itimerspec 	its;
+						its.it_value.tv_sec = freq_msecs / 100;
+						its.it_value.tv_nsec = 0;
+						its.it_interval.tv_sec = 0;
+						its.it_interval.tv_nsec = 0;
+						
+	struct sigevent 	sev;
+						sev.sigev_notify = SIGEV_SIGNAL;
+						sev.sigev_signo = SIG;
+						sev.sigev_value.sival_int = timerName;
+
+	struct sigaction 	sa;
+						sa.sa_flags = SA_SIGINFO;
+						sa.sa_sigaction = onTimer;
+
+	timer_t timerid=0;
+
+	/* Establish handler for timer signal */
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIG, &sa, NULL) == -1)
+		fprintf(stderr, "Timer error: sigaction");
+	
+	/* Create the timer */
+	if (timer_create(CLOCKID, &sev, &timerid) == -1)
+		fprintf(stderr, "Timer error: timer_create");
+	
+	/* Start the timer */
+	if (timer_settime(timerid, 0, &its, NULL) == -1)
+		fprintf(stderr, "Timer error: timer_settime");
+	
+	return timerid;
+}
+							
+static int set_timer(timer_t timerid, unsigned int freq_msecs)
+{
+    struct itimerspec 	its;
+						its.it_value.tv_sec = freq_msecs / 100;
+						its.it_value.tv_nsec = 0;
+						its.it_interval.tv_sec = 0;
+						its.it_interval.tv_nsec = 0;
+	
+   /* Start the timer */
+   if (timer_settime(timerid, 0, &its, NULL) == -1)
+         fprintf(stderr, "Timer error: timer_settime");
+
+   return 1;
+}
+
+volatile static int powerDown = 0;
+volatile static int suspend = 0;
+volatile static int newMsg = 0;
+volatile static int valkeyb = 0;
+volatile static int	flashKeyBrd = 0;
+
+void _powerDown(int sig)
+{
+	// SIGUSR1 handler
+	powerDown = 1;
+}
+
+void _suspend(int sig)
+{
+	// SIGUSR2 handler
+	suspend = 1;
+}
+
+void _newMsg(int sig)
+{
+	newMsg = 1;
+	flashKeyBrd = 1;
+}
+
+void* bldaemonLoop()
+{
+	int power = PWR_UNKNOWN;
+	int lid = LID_UNKNOWN;
+	for(;;)
+	{
+		if(lid != lidstate())
+		{
+			lid = lidstate();
+			lightswitch(lid);
+		}
+
+		if(power != powerstate()){	//there has been a change in the powerstate
+			power = powerstate();
+			if (power) {	// AC is plugged in
+				screenOn();
+				
+				set_timer(keys_timerid, 0);
+				set_timer(lcd_timerid, 0);
+		
+				//store current brightness as dim values
+				//conf->dimscrb = getscrb();
+				//conf->dimkeyb = getkeyb();
+				keysOn();
+				lcdb(conf->brightscrb);
+				keyb(conf->brightkeyb);	//and brighten lights
+			}else{	// AC is unplugged
+
+				set_timer(keys_timerid, conf->keytimeout);
+				set_timer(lcd_timerid, conf->lcdtimeout);
+				
+				//store current brightness as bright
+				//conf->brightscrb = getscrb();
+				//conf->brightkeyb = getkeyb();
+				lcdb(conf->dimscrb);
+				keyb(conf->dimkeyb);	//and dim lights
+			}
+		}
+		/* Run command if power button was pressed and lid open */
+		if ( wasPwrPressed && lid){
+			wasPwrPressed = 0;
+			system(conf->pwrcmd);
+		}
+	}
+}
 
 int main (int argc, char **argv)
 {
@@ -491,7 +848,9 @@ int main (int argc, char **argv)
 	unsigned short cmd_opts = 0;
 	char *devnode = NULL;
 
-	active = 1; /* must be  set to true to run binds */
+	int readErr = 0; // for catching SIGUSR from timers while reading keyboard input
+
+	active = 1; /* must be set to true to run binds */
 
 	/* default conf_file */
 	/* fixme: what if there's no HOME environ var? */
@@ -560,7 +919,7 @@ int main (int argc, char **argv)
 
 	printf("%s: Loaded config file %s\n", argv[0], conf_file);
 
-	settings *conf = load_settings(conf_file);
+	conf = load_settings(conf_file);
 
 	/* combine command line options with setting file options.
 	 * command line options override conf file */
@@ -602,22 +961,62 @@ int main (int argc, char **argv)
 	if ( ! ( ISSET(conf->opts, EBK_NODAEMON) ) )
 		if (fork()) exit(0);
 
+	/* run thread to watch power button presses */
+	evpwrfd = open(conf->pwrdev, O_RDONLY);
+	if (evpwrfd == -1) {
+		fprintf(stderr, "Cannot open pwrbttn fd %s: %s.\n", conf->pwrdev, strerror(errno));
+		exit(255);
+	}
+	pthread_mutex_init(&pwrlock, NULL);
+	pthread_create(&get_pwrpressed, NULL, &GetPwrPressed, NULL);
 
+	/*
+	 * Begin backlight daemon setup
+	 */
+	
+	/* set screen blank to never -- it doesn't blank the frame buffer so don't use it */
+	system("echo -ne \"\\033[9;0]\" >/dev/tty0");
+
+	/* first screen blanking is always white so blank it and turn it back on once */
+	screenOff();
+	screenOn();
+
+	/* intialize the keyboard and screen backlights */
+	keyb(powerstate() == PWR_AC_CORD?conf->brightkeyb:conf->dimkeyb);
+	keysOn();
+
+	/* initialize backlight daemon timers */
+	keys_timerid = create_timer(KEYS_TIMER, conf->keytimeout);
+	lcd_timerid = create_timer(LCD_TIMER, conf->lcdtimeout);
+	power_timerid = create_timer(POWER_TIMER, 0);
+
+	signal(SIGQUIT, _powerDown);
+	signal(SIGINT, _suspend);
+	signal(SIGUSR1, _newMsg);
+
+	/* Start the backlight daemon thread */
+	pthread_create(&bldaemon, NULL, &bldaemonLoop, NULL);
+	
 	for(;;)
 	{
 		if ( read(eventfh, &ievent, sizeof(struct input_event)) == -1 )
 		{
 			/* read() will always get sizeof(struct input_event) number
 			 * of bytes, the kernel gurantees this, so we only worry
-			 * about reads error. */
+			 * about reads error. 
+			*/
+			/* backlight timers throw SIGUSR which interrupt our read.
+			 * Catch these (error # 4) and continue with our loop */
+			readErr = errno;
+			if(readErr != 4){
+				fprintf(stderr, "Error reading keyboard input device: %d\n", readErr);
+				exit(3);
+			}
+		}else{ readErr = 0; }
 
-			perror("Error reading device");
-			exit(3);
-		}
-
-		/* Do nothing if lid is closed */
-		if ( lidstate() != LID_CLOSED ) {
-
+		/* Do nothing with keyboard input if lid is closed or if there's a read error */
+		if ( lidstate() != LID_CLOSED  || !readErr) {
+			
 			int bFiltered = 0;
 
 			if(bProcessMouse || bTempProcessMouse){
@@ -632,8 +1031,14 @@ int main (int argc, char **argv)
 						fflush(stdout);
 					}
 
-					/*reset the keyboard timer and turn on the lights */
-					onKeyPress();
+					/* reset the timers and turn on the lights
+					 * only if we are on battery */
+					if(!powerstate()){
+						set_timer(keys_timerid, conf->keytimeout);
+						set_timer(lcd_timerid, conf->lcdtimeout);
+						screenOn();
+						keysOn();
+					}
 
 					/* if no other keys are pressed, filter the keystroke */
 					if(list_start->next == NULL)
@@ -723,7 +1128,7 @@ settings *load_settings (const char *conffile)
 	event_first->next = NULL;
 	event *event_cur = event_first;
 
-	settings *conf = calloc(1, sizeof(settings));
+	settings *tmpconf = calloc(1, sizeof(settings));
 
 	cfg_opt_t ebk_event_opts[] =
 	{
@@ -736,8 +1141,20 @@ settings *load_settings (const char *conffile)
 	cfg_opt_t ebk_opts[] =
 	{
 		CFG_BOOL("daemon", 1, CFGF_NONE),
-		CFG_STR("dev", "", CFGF_NONE | CFGF_NODEFAULT),
+		CFG_STR("dev", "/dev/input/event0", CFGF_NONE),
 		CFG_SEC("event", ebk_event_opts, CFGF_MULTI),
+		// New options for backlight daemon control
+		CFG_STR("pwrdev", "/dev/input/event1", CFGF_NONE),
+		CFG_STR("pwrcmd", "/usr/sbin/suspend", CFGF_NONE),
+		CFG_STR("onpwrdown", "/usr/sbin/onPowerDown", CFGF_NONE),
+		CFG_STR("scrbfile", "/sys/class/backlight/pxabus:display-backlight/", CFGF_NONE),
+		CFG_INT("brightscrb", 8, CFGF_NONE),
+		CFG_INT("dimscrb", 3, CFGF_NONE),
+		CFG_INT("lcdtimeout", 6000, CFGF_NONE),
+		CFG_STR("keybfile", "/sys/class/backlight/pxabus:keyboard-backlight/", CFGF_NONE),
+		CFG_INT("brightkeyb", 2, CFGF_NONE),
+		CFG_INT("dimkeyb", 1, CFGF_NONE),
+		CFG_INT("keytimeout", 500, CFGF_NONE),
 		CFG_END()
 	};
 
@@ -748,10 +1165,21 @@ settings *load_settings (const char *conffile)
 	if (cfg_parse(cfg, conffile) == CFG_PARSE_ERROR)
 		exit(1);
 
-	conf->dev = strdup(cfg_getstr(cfg, "dev"));
+	tmpconf->dev = strdup(cfg_getstr(cfg, "dev"));
+	tmpconf->pwrdev = strdup(cfg_getstr(cfg, "pwrdev"));
+	tmpconf->pwrcmd = strdup(cfg_getstr(cfg, "pwrcmd"));
+	tmpconf->onpwrdown = strdup(cfg_getstr(cfg, "onpwrdown"));
+	tmpconf->scrbfile = strdup(cfg_getstr(cfg, "scrbfile"));
+	tmpconf->keybfile = strdup(cfg_getstr(cfg, "keybfile"));
+	tmpconf->brightscrb = cfg_getint(cfg, "brightscrb");
+	tmpconf->dimscrb = cfg_getint(cfg, "dimscrb");
+	tmpconf->lcdtimeout = cfg_getint(cfg, "lcdtimeout");
+	tmpconf->brightkeyb = cfg_getint(cfg, "brightkeyb");
+	tmpconf->dimkeyb = cfg_getint(cfg, "dimkeyb");
+	tmpconf->keytimeout = cfg_getint(cfg, "keytimeout");
 
 	if ( ! cfg_getbool(cfg, "daemon") )
-		conf->opts |= EBK_NODAEMON;
+		tmpconf->opts |= EBK_NODAEMON;
 
 	for (i=0; i < cfg_size(cfg, "event"); i++)
 	{
@@ -786,20 +1214,20 @@ settings *load_settings (const char *conffile)
 	}
 
 
-    /*
+/*   
 	 //print the parsed values to another file
     {
         FILE *fp = fopen("/etc/ebindkeys.conf.out", "w");
         cfg_print(cfg, fp);
         fclose(fp);
     }
-	*/
+*/
 
 	cfg_free(cfg);
 
-	conf->event_first = event_first;
+	tmpconf->event_first = event_first;
 
-	return(conf);
+	return(tmpconf);
 }
 
 

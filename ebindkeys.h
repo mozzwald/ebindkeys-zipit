@@ -25,6 +25,12 @@ typedef struct {
 
 typedef struct {
 	char *dev;
+	char *pwrdev;
+	char *pwrcmd;
+	char *onpwrdown;
+	char *scrbfile;
+	char *keybfile;
+	long int brightscrb, dimscrb, lcdtimeout, brightkeyb, dimkeyb, keytimeout;
 	unsigned short opts;
 	event *event_first;
 } settings;
