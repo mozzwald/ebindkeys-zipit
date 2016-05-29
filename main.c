@@ -806,8 +806,6 @@ int main (int argc, char **argv)
 	unsigned short cmd_opts = 0;
 	char *devnode = NULL;
 
-	int readErr = 0; // for catching SIGUSR from timers while reading keyboard input
-
 	active = 1; /* must be set to true to run binds */
 
 	/* default conf_file */
@@ -981,15 +979,15 @@ int main (int argc, char **argv)
 			//fprintf(stderr, "Event on keyboard\n");
 			if ( read(eventfh, &ievent, sizeof(struct input_event)) == -1 )
 			{
-				readErr = errno;
+				int readErr = errno;
 				if(readErr != 4){
 					fprintf(stderr, "Error reading keyboard input device: %d\n", readErr);
 					exit(3);
 				}
-			}else{ readErr = 0; }
+			}
 
-			/* Do nothing with keyboard input if lid is closed or if there's a read error */
-			if ( lidstate() != LID_CLOSED  || !readErr) {
+			/* Do nothing with keyboard input if lid is closed */
+			if ( lidstate() != LID_CLOSED ) {
 				
 				int bFiltered = 0;
 	
