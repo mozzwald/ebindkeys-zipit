@@ -643,9 +643,12 @@ static inline void screenOn(){
 	   perror("sigprocmask");
 
 	if(bScreenOff){//turn it back on
+		/* Test using lightswitch() function instead of blanking fb
 		FILE *fblank = fopen("/sys/class/graphics/fb0/blank", "w");
 		fputs("0", fblank);
 		fclose(fblank);
+		*/
+		lightswitch(bScreenOff);
 		bScreenOff = 0;
 	}
 
@@ -655,9 +658,12 @@ static inline void screenOn(){
 }
 	
 static inline void screenOff(){
+	/* Test using lightswitch() function instead of blanking fb
 	FILE *fblank = fopen("/sys/class/graphics/fb0/blank", "w");
 	fputs("1", fblank);
 	fclose(fblank);
+	*/
+	lightswitch(bScreenOff);
 	bScreenOff = 1;
 }
 
@@ -939,9 +945,10 @@ int main (int argc, char **argv)
 	/* set screen blank to never -- it doesn't blank the frame buffer so don't use it */
 	system("echo -ne \"\\033[9;0]\" >/dev/tty0");
 
-	/* first screen blanking is always white so blank it and turn it back on once */
+	/* first screen blanking is always white so blank it and turn it back on once
 	screenOff();
 	screenOn();
+	*/
 
 	/* intialize the keyboard and screen backlights */
 	keyb(powerstate() == PWR_AC_CORD?conf->brightkeyb:conf->dimkeyb);
