@@ -157,8 +157,6 @@ int openUInput(int *ufile, int *ufile_mouse, int *eventfh, const char* device){
 		fprintf(stderr, "Error opening uinput device! Is the uinput module loaded?");
 		return 0;
 	}
-	
-	
 
 	*ufile_mouse = open("/dev/input/uinput", O_WRONLY);
 	if (*ufile_mouse == -1)
@@ -168,7 +166,7 @@ int openUInput(int *ufile, int *ufile_mouse, int *eventfh, const char* device){
 		fprintf(stderr, "Error opening uinput mouse device! Is the uinput module loaded?");
 		return 0;
 	}
-	
+
 	ioctl(*ufile, UI_SET_EVBIT, EV_KEY);
 	ioctl(*ufile, UI_SET_EVBIT, EV_REL);
 	for (int i = 0; i < KEY_MAX; i++)
@@ -222,7 +220,7 @@ int openUInput(int *ufile, int *ufile_mouse, int *eventfh, const char* device){
 		fprintf(stderr, "Error creating uinput device!");
 		return 0;
 	}
-	
+
 	return 1;
 }
 
@@ -251,17 +249,16 @@ int send_event(int ufile, __u16 type, __u16 code, __s32 value)
 
 int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 {
-	int dx=0; 
+	int dx=0;
 	int dy=0;
 	static int moving, accel;
 
 	uint32_t code;
 	int bEventHandled = 1;
-	
+
 	switch(pEvent->code){
 
 		case KEY_UP:
-
 			if (pEvent->value == 0)
 				moving--;
 			else {//if (pEvent->value == 1)
@@ -269,7 +266,6 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 				dy=-1;
 			}
 			break;
-
 		case KEY_DOWN:
 			if (pEvent->value == 0)
 				moving--;
@@ -278,7 +274,6 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 				dy=1;
 			}
 			break;
-			
 		case KEY_RIGHT:
 			if (pEvent->value == 0)
 				moving--;
@@ -287,7 +282,6 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 				dx=1;
 			}
 			break;
-			
 		case KEY_LEFT:
 			if (pEvent->value == 0)
 				moving--;
@@ -296,26 +290,22 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 				dx=-1;
 			}
 			break;
-			
 		case KEY_END: //} else if (pEvent->code == lbutton_code {
 			send_event(ufile_mouse, EV_KEY, BTN_LEFT, pEvent->value);
 			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
 			break;
-			
 		case KEY_STOPCD: //} else if (pEvent->code == rbutton_code) {
 			send_event(ufile_mouse, EV_KEY, BTN_RIGHT, pEvent->value);
 			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
 			break;
-			
 		case KEY_PLAYCD: //} else if (pEvent->code == mbutton_code) {
 			send_event(ufile_mouse, EV_KEY, BTN_MIDDLE, pEvent->value);
 			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
 			break;
-	
 		default:
-			bEventHandled = 0;	
-			
-			
+			bEventHandled = 0;
+
+
 	}
 
 	/* Clamp value */
@@ -331,7 +321,7 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 		send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
 	} else
 		accel = 0;
-	
+
 	return bEventHandled;
 }
 
@@ -343,14 +333,47 @@ int filterKeyStroke(int ufile, int ufile_mouse, const struct input_event const* 
 	/* this function determines if this keystroke shouild be eaten, injected with alternate keystrokes,
 		or just passed on to the rest of the system (i.e. the keymap)	*/
 
-	int bFiltered = 1;
+	int bFiltered = 0;
 	bTempProcessMouse = 0;
-	
+
 	struct input_event 	ievent = *pEvent;
 
 	switch(pEvent->code){
 //	case KEY_POWER:
+	case KEY_PLAYCD:
+		{
+			//checkfor /tmp/run/gmu.pid
+			FILE *gmu_pid = fopen("/tmp/run/gmu.pid", "r");
+			if(gmu_pid != NULL)
+			{
+				//send the <space> keystroke
+				ievent.code = KEY_SPACE;
+				write(ufile, &ievent, sizeof(struct input_event));
+				ievent.value = EBK_KEY_UP; //KEY_UP
+				write(ufile, &ievent, sizeof(struct input_event));
+				fclose(gmu_pid);
 
+				bFiltered = 1;
+			}
+		}
+		break;
+	case KEY_STOPCD:
+		{
+			//checkfor /tmp/run/gmu.pid
+			FILE *gmu_pid = fopen("/tmp/run/gmu.pid", "r");
+			if(gmu_pid != NULL)
+			{
+				//send the <x> keystroke
+				ievent.code = KEY_X;
+				write(ufile, &ievent, sizeof(struct input_event));
+				ievent.value = EBK_KEY_UP; //KEY_UP
+				write(ufile, &ievent, sizeof(struct input_event));
+				fclose(gmu_pid);
+
+				bFiltered = 1;
+			}
+		}
+		break;
 	case KEY_OPTION:
 		if(bExperiment){
 			//send the <ctrl> keystroke
@@ -380,27 +403,41 @@ int filterKeyStroke(int ufile, int ufile_mouse, const struct input_event const* 
 			//send the <alt> keystroke
 			ievent.code = KEY_LEFTALT;
 			write(ufile, &ievent, sizeof(struct input_event));
-		}
-		else
-			bProcessMouse = !bProcessMouse;
-			bFiltered = 0;
-		break;
 
+			bFiltered = 1;
+		}
+	//	else
+	//		bProcessMouse = !bProcessMouse;
+		break;
 	case KEY_LEFTCTRL:
 		bTempProcessMouse = 1;
-		bFiltered = 0;
-		
 		break;
-
 	case KEY_HOME:
 		/* 	*****    do not write the event    ******
 			the Home btn should be assigned to F1 in the Keymap
 			however, we do not want this keystroke to be called when the button is pressed,
 			instead we are only interested in what function ebindkeys would like to run */
-		break;
+			//send the <F1> keystroke -- it should be assigned to the Home btn in the keymap
 
+		//send out an Alt-Tab for SDL to take action and give up the terminal
+		// this could be F13 if SDL wasn't such a stubborn pig
+
+			ievent.code = KEY_LEFTCTRL;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			ievent.code = KEY_TAB;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			ievent.value = EBK_KEY_UP; //KEY_UP
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			ievent.code = KEY_LEFTCTRL;
+			write(ufile, &ievent, sizeof(struct input_event));
+
+			bFiltered = 1;
+		break;
 	default:
-		bFiltered = 0;
+		break;
 	}
 
 
@@ -516,8 +553,9 @@ int lightswitch(int onoroff) {	//turns backlight power on or off
 		fclose(key);
 		success = 1;
 	} else {
-	success = 0;
+		success = 0;
 	}
+
 	return success;
 }
 
@@ -533,8 +571,9 @@ int lcdb(int scrbr) {	//set screen to given brightness
 		fclose(scr);
 		success = 1;
 	} else {
-	success = 0;
+		success = 0;
 	}
+
 	return success;
 }
 
@@ -550,8 +589,9 @@ int keyb(int keybr) {	//set keyboard to given brightness
 		fclose(key);
 		success = 1;
 	} else {
-	success = 0;
+		success = 0;
 	}
+
 	return success;
 }
 
@@ -565,6 +605,7 @@ int getscrb(void) {	//return current brightness of screen
 		scrbr = atoi(fgets(buf, sizeof buf, scr));
 		fclose(scr);
 	}
+
 	return scrbr;
 }
 
@@ -578,6 +619,7 @@ int getkeyb(void) {	//return current brightness of keyboard
 		keybr = atoi(fgets(buf, sizeof buf, key));
 		fclose(key);
 	}
+
 	return keybr;
 }
 
@@ -611,9 +653,9 @@ void keysOn() {	//turns backlight power on
 		fclose(key);
 	}
 
-   /* Unlock the timer signal, so that timer notification can be delivered */
-   if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
-	   perror("sigprocmask");
+	/* Unlock the timer signal, so that timer notification can be delivered */
+	if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
+		perror("sigprocmask");
 }
 
 static inline void keysOff() {	//turns backlight power off
@@ -652,11 +694,11 @@ static inline void screenOn(){
 		bScreenOff = 0;
 	}
 
-   /* Unlock the timer signal, so that timer notification nan be delivered */
-   if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
-	   perror("sigprocmask");
+	/* Unlock the timer signal, so that timer notification nan be delivered */
+	if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
+		perror("sigprocmask");
 }
-	
+
 static inline void screenOff(){
 	/* Test using lightswitch() function instead of blanking fb
 	FILE *fblank = fopen("/sys/class/graphics/fb0/blank", "w");
@@ -673,29 +715,25 @@ static void onTimer(int sig, siginfo_t *si, void *uc)
 		case KEYS_TIMER:
 			keysOff();
 			break;
-	
 		case LCD_TIMER:
 			screenOff();
 			break;
-
 		case POWER_TIMER:
 			system(conf->onpwrdown);
-		
 			break;
-
 		default:
 			break;
 	}
 }
-     
+
 timer_t create_timer(int timerName, unsigned int freq_msecs)
 {
-    struct itimerspec 	its;
+	struct itimerspec 	its;
 						its.it_value.tv_sec = freq_msecs / 100;
 						its.it_value.tv_nsec = 0;
 						its.it_interval.tv_sec = 0;
 						its.it_interval.tv_nsec = 0;
-						
+
 	struct sigevent 	sev;
 						sev.sigev_notify = SIGEV_SIGNAL;
 						sev.sigev_signo = SIG;
@@ -711,55 +749,112 @@ timer_t create_timer(int timerName, unsigned int freq_msecs)
 	sigemptyset(&sa.sa_mask);
 	if (sigaction(SIG, &sa, NULL) == -1)
 		fprintf(stderr, "Timer error: sigaction");
-	
+
 	/* Create the timer */
 	if (timer_create(CLOCKID, &sev, &timerid) == -1)
 		fprintf(stderr, "Timer error: timer_create");
-	
+
 	/* Start the timer */
 	if (timer_settime(timerid, 0, &its, NULL) == -1)
 		fprintf(stderr, "Timer error: timer_settime");
-	
+
 	return timerid;
 }
-							
+
 static int set_timer(timer_t timerid, unsigned int freq_msecs)
 {
-    struct itimerspec 	its;
+	struct itimerspec 	its;
 						its.it_value.tv_sec = freq_msecs / 100;
 						its.it_value.tv_nsec = 0;
 						its.it_interval.tv_sec = 0;
 						its.it_interval.tv_nsec = 0;
-	
-   /* Start the timer */
-   if (timer_settime(timerid, 0, &its, NULL) == -1)
-         fprintf(stderr, "Timer error: timer_settime");
 
-   return 1;
+	/* Start the timer */
+	if (timer_settime(timerid, 0, &its, NULL) == -1)
+		fprintf(stderr, "Timer error: timer_settime");
+
+	return 1;
 }
 
 volatile static int powerDown = 0;
 volatile static int suspend = 0;
 volatile static int newMsg = 0;
 volatile static int valkeyb = 0;
-volatile static int	flashKeyBrd = 0;
 
 void _powerDown(int sig)
 {
-	// SIGUSR1 handler
+	/* SIGQUIT handler */
 	powerDown = 1;
 }
 
 void _suspend(int sig)
 {
-	// SIGUSR2 handler
+	/* SIGINT handler */
 	suspend = 1;
 }
 
 void _newMsg(int sig)
 {
+	/* SIGUSR2 Handler */
 	newMsg = 1;
-	flashKeyBrd = 1;
+	char *ledFile;
+
+	switch(conf->notifyled){
+		case 1:
+			ledFile = "/sys/class/leds/z2:green:charged/trigger";
+			break;
+		case 2:
+			ledFile = "/sys/class/leds/z2:amber:charging/trigger";
+			break;
+		case 3:
+			ledFile = "/sys/class/leds/z2:green:wifi/trigger";
+			break;
+		default:
+			ledFile = "/sys/class/leds/z2:amber:charging/trigger";
+			break;
+	}
+
+	FILE *led = fopen(ledFile, "w");
+
+	if (led != NULL) {
+		char buf [10];
+		sprintf(buf, "%s", "heartbeat");
+		fputs(buf, led);
+		fclose(led);
+		//fprintf(stderr, "newMsg LED: %s\n", ledFile);
+	}
+}
+
+/* Turns off the newMsg notification LED */
+void* msgOff()
+{
+	newMsg = 0;
+	char *ledFile;
+
+	switch(conf->notifyled){
+		case 1:
+			ledFile = "/sys/class/leds/z2:green:charged/trigger";
+			break;
+		case 2:
+			ledFile = "/sys/class/leds/z2:amber:charging/trigger";
+			break;
+		case 3:
+			ledFile = "/sys/class/leds/z2:green:wifi/trigger";
+			break;
+		default:
+			ledFile = "/sys/class/leds/z2:amber:charging/trigger";
+			break;
+	}
+
+	FILE *led = fopen(ledFile, "w");
+
+	if (led != NULL) {
+		char buf [5];
+		sprintf(buf, "%s", "none");
+		fputs(buf, led);
+		fclose(led);
+		//fprintf(stderr, "newMsg: off\n");
+	}
 }
 
 void* bldaemonLoop()
@@ -772,19 +867,23 @@ void* bldaemonLoop()
 		{
 			lid = lidstate();
 			lightswitch(lid);
+			if(newMsg)
+				msgOff();
 		}
 
 		if(power != powerstate()){	//there has been a change in the powerstate
 			power = powerstate();
 			if (power) {	// AC is plugged in
 				screenOn();
-				
+
 				set_timer(keys_timerid, 0);
 				set_timer(lcd_timerid, 0);
-		
+
 				//store current brightness as dim values
-				//conf->dimscrb = getscrb();
-				//conf->dimkeyb = getkeyb();
+				conf->dimscrb = getscrb();
+				conf->dimkeyb = getkeyb();
+				//fprintf(stderr, "Save AC OFF getscrb: %d, %d\n", getscrb(), conf->dimscrb);
+				//fprintf(stderr, "Save AC OFF getkeyb: %d, %d\n", getkeyb(), conf->dimkeyb);
 				keysOn();
 				lcdb(conf->brightscrb);
 				keyb(conf->brightkeyb);	//and brighten lights
@@ -792,10 +891,12 @@ void* bldaemonLoop()
 
 				set_timer(keys_timerid, conf->keytimeout);
 				set_timer(lcd_timerid, conf->lcdtimeout);
-				
+
 				//store current brightness as bright
-				//conf->brightscrb = getscrb();
-				//conf->brightkeyb = getkeyb();
+				conf->brightscrb = getscrb();
+				conf->brightkeyb = getkeyb();
+				//fprintf(stderr, "Save AC ON getscrb: %d, %d\n", getscrb(), conf->brightscrb);
+				//fprintf(stderr, "Save AC ON getkeyb: %d, %d\n", getkeyb(), conf->brightkeyb);
 				lcdb(conf->dimscrb);
 				keyb(conf->dimkeyb);	//and dim lights
 			}
@@ -937,11 +1038,11 @@ int main (int argc, char **argv)
 	/* Setup the file descriptor set for select() */
 	fd_set ebkfds;
 	int input_detect;
-	
+
 	/*
 	 * Begin backlight daemon setup
 	 */
-	
+
 	/* set screen blank to never -- it doesn't blank the frame buffer so don't use it */
 	system("echo -ne \"\\033[9;0]\" >/dev/tty0");
 
@@ -961,23 +1062,23 @@ int main (int argc, char **argv)
 
 	signal(SIGQUIT, _powerDown);
 	signal(SIGINT, _suspend);
-	signal(SIGUSR1, _newMsg);
+	signal(SIGUSR2, _newMsg);
 
 	/* Start the backlight daemon thread */
 	pthread_create(&bldaemon, NULL, &bldaemonLoop, NULL);
-	
+
 	for(;;)
 	{
 		/* Reset our file descriptor set */
 		FD_ZERO(&ebkfds);
         FD_SET(eventfh, &ebkfds);
         FD_SET(evpwrfd, &ebkfds);
-		
+
 		/* Watch both pwr bttn and keyboard file descriptors for input
 		 * then read and do something for each
 		 */
 		input_detect = select( FD_SETSIZE , &ebkfds , NULL , NULL , NULL);
-        if ((input_detect < 0) && (errno!=EINTR)) 
+        if ((input_detect < 0) && (errno!=EINTR))
         {
             fprintf(stderr, "select error\n");
         }
@@ -995,9 +1096,8 @@ int main (int argc, char **argv)
 
 			/* Do nothing with keyboard input if lid is closed */
 			if ( lidstate() != LID_CLOSED ) {
-				
 				int bFiltered = 0;
-	
+
 				if(bProcessMouse || bTempProcessMouse){
 					bFiltered = process_mouse_event(ufile_mouse, &ievent);
 						if(bFiltered) continue;
@@ -1009,7 +1109,7 @@ int main (int argc, char **argv)
 							printf(">%X<\n", ievent.code);
 							fflush(stdout);
 						}
-	
+
 						/* reset the timers and turn on the lights
 						 * only if we are on battery */
 						if(!powerstate()){
@@ -1018,22 +1118,22 @@ int main (int argc, char **argv)
 							screenOn();
 							keysOn();
 						}
-	
+
 						/* if no other keys are pressed, filter the keystroke */
 						if(list_start->next == NULL)
 							bFiltered = filterKeyStroke(ufile, ufile_mouse, &ievent, ISSET(conf->opts, EBK_EXPERIMENTAL));
-	
+
 				//		if(bFiltered) continue;
-	
+
 						/* add to depressed struct */
 						list_end->code = ievent.code;
 						list_end->next = calloc(1,sizeof(key_press));
 						list_end = list_end->next;
 						list_end->next = NULL;
-	
+
 						Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_false);
 				}
-	
+
 				/* Key has been released */
 				if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_UP )
 				{
@@ -1042,25 +1142,24 @@ int main (int argc, char **argv)
 							printf("<%X>\n", ievent.code);
 							fflush(stdout);
 					}
-	
+
 					Match_keysToEvent(list_start, event_first, (ISSET(conf->opts, EBK_NOFORK)), cfg_true);
-	
+
 					/* remove from depressed struct */
 					list_cur = list_start;
 					list_prev = NULL;
-	
+
 					while (list_cur->code != ievent.code && list_cur->next != NULL)
 					{
 						list_prev = list_cur;
 						list_cur = list_cur->next;
 					}
-	
+
 					/* if below is true, most likely, a key was released
 					 * but ebindkeys didn't detect the press */
 					if (list_cur->next == NULL)
 						continue;
-	
-	
+
 					if (list_prev == NULL)
 					{
 						/* no previous? we're at start! */
@@ -1070,15 +1169,18 @@ int main (int argc, char **argv)
 					{
 						list_prev->next = list_cur->next;
 					}
-	
+
 					free(list_cur);
-				
+
 					if(ievent.code == KEY_LEFTCTRL)
 						bTempProcessMouse=0;
 				}
-				
+
 				if(!bFiltered)
 					write(ufile, &ievent, sizeof(struct input_event));
+
+				if(newMsg)
+					msgOff();
 			}
 		}
 		else if (FD_ISSET(evpwrfd, &ebkfds))
@@ -1163,6 +1265,7 @@ settings *load_settings (const char *conffile)
 		CFG_INT("brightkeyb", 2, CFGF_NONE),
 		CFG_INT("dimkeyb", 1, CFGF_NONE),
 		CFG_INT("keytimeout", 500, CFGF_NONE),
+		CFG_INT("notifyled", 2, CFGF_NONE),
 		CFG_END()
 	};
 
@@ -1185,6 +1288,7 @@ settings *load_settings (const char *conffile)
 	tmpconf->brightkeyb = cfg_getint(cfg, "brightkeyb");
 	tmpconf->dimkeyb = cfg_getint(cfg, "dimkeyb");
 	tmpconf->keytimeout = cfg_getint(cfg, "keytimeout");
+	tmpconf->notifyled = cfg_getint(cfg, "notifyled");
 
 	if ( ! cfg_getbool(cfg, "daemon") )
 		tmpconf->opts |= EBK_NODAEMON;
@@ -1222,7 +1326,7 @@ settings *load_settings (const char *conffile)
 	}
 
 
-/*   
+/*
 	 //print the parsed values to another file
     {
         FILE *fp = fopen("/etc/ebindkeys.conf.out", "w");
@@ -1258,5 +1362,6 @@ unsigned int list_len (key_press *list)
 		i++;
 		list = list->next;
 	}
+
 	return i;
 }
