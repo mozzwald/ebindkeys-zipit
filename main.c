@@ -37,6 +37,9 @@
 /* Define global config variable */
 settings *conf;
 
+/* LCD Timer Flag, enabled by default */
+static int lcd_timer_enable = 1;
+
 #define MAP_SIZE 4096UL
 #define GPIO_BASE 0x40E00000 /* PXA270 GPIO Register Base */
 
@@ -447,59 +450,6 @@ int filterKeyStroke(int ufile, int ufile_mouse, const struct input_event const* 
 	return bFiltered;
 }
 
-void Match_keysToEvent(key_press* list_start, const event* event_first, int DoNotFork, cfg_bool_t bOnRelease)
-//while ( event_cur != NULL && !event_cur->bindToReleaseEvent) /* cycle through all events in the config file*/
-{
-	int count = list_len(list_start);
-	const event* event_cur = event_first;
-	key_press* list_cur;
-
-	while ( event_cur->next != NULL ) //cycle through all events in the config file
-	{
-		/* don't bother matching keys if the key count doesn't match
-		 * the keys pressed count */
-
-
-		if (bOnRelease == event_cur->bindToReleaseEvent && count == event_cur->key_count)
-		{
-			int j = 0; /* set flag to 0 */
-
-			/* cycle through all the keys for event_cur */
-			for ( int i=0; i < event_cur->key_count; i++)
-			{
-				list_cur = list_start;
-
-				/* check this event's keys to all currently pressed keys */
-				while(list_cur->next != NULL)
-				{
-					if ( event_cur->keys[i] == list_cur->code )
-						j++;
-					list_cur = list_cur->next;
-				}
-			}
-			if (j == event_cur->key_count)
-			{
-				if (!strcmp(event_cur->action, "TOGGLE"))
-					active ^= 1;
-				else if (active)
-				{
-				/* we have a go. fork and run the action */
-					if(DoNotFork)
-						system(event_cur->action);
-					else if (!fork())
-					{
-						system(event_cur->action);
-						exit(0);
-					}
-
-				}
-			}
-		}
-
-		event_cur = event_cur->next;
-	}
-}
-
 /* reference:
 
  * Event Types:
@@ -673,7 +623,6 @@ static inline void keysOff() {	//turns backlight power off
 static timer_t keys_timerid = 0;
 static timer_t lcd_timerid = 0;
 static timer_t power_timerid = 0;
-
 static unsigned int bScreenOff = 0;
 
 static inline void screenOn(){
@@ -774,6 +723,70 @@ static int set_timer(timer_t timerid, unsigned int freq_msecs)
 		fprintf(stderr, "Timer error: timer_settime");
 
 	return 1;
+}
+
+void Match_keysToEvent(key_press* list_start, const event* event_first, int DoNotFork, cfg_bool_t bOnRelease)
+//while ( event_cur != NULL && !event_cur->bindToReleaseEvent) /* cycle through all events in the config file*/
+{
+	int count = list_len(list_start);
+	const event* event_cur = event_first;
+	key_press* list_cur;
+
+	while ( event_cur->next != NULL ) //cycle through all events in the config file
+	{
+		/* don't bother matching keys if the key count doesn't match
+		 * the keys pressed count */
+
+
+		if (bOnRelease == event_cur->bindToReleaseEvent && count == event_cur->key_count)
+		{
+			int j = 0; /* set flag to 0 */
+
+			/* cycle through all the keys for event_cur */
+			for ( int i=0; i < event_cur->key_count; i++)
+			{
+				list_cur = list_start;
+
+				/* check this event's keys to all currently pressed keys */
+				while(list_cur->next != NULL)
+				{
+					if ( event_cur->keys[i] == list_cur->code )
+						j++;
+					list_cur = list_cur->next;
+				}
+			}
+			if (j == event_cur->key_count)
+			{
+				if (!strcmp(event_cur->action, "TOGGLE"))
+					active ^= 1;
+				else if (!strcmp(event_cur->action, "LCD_TIMER_TOGGLE")){
+					if ( lcd_timer_enable == 0 ){
+						/* Turn ON LCD Backlight Timer */
+						set_timer(lcd_timerid, conf->lcdtimeout);
+						lcd_timer_enable = 1;
+					}else{
+						/* Turn OFF LCD Backlight Timer */
+						set_timer(lcd_timerid, 0);
+						lcd_timer_enable = 0;
+					}
+				}
+				else if (active)
+				{
+				/* we have a go. fork and run the action */
+					if(DoNotFork)
+						system(event_cur->action);
+					else if (!fork())
+					{
+						system(event_cur->action);
+						exit(0);
+					}
+
+				}
+			}
+		}
+
+		event_cur = event_cur->next;
+	}
 }
 
 volatile static int powerDown = 0;
@@ -1114,7 +1127,8 @@ int main (int argc, char **argv)
 						 * only if we are on battery */
 						if(!powerstate()){
 							set_timer(keys_timerid, conf->keytimeout);
-							set_timer(lcd_timerid, conf->lcdtimeout);
+							if ( lcd_timer_enable != 0 )
+								set_timer(lcd_timerid, conf->lcdtimeout);
 							screenOn();
 							keysOn();
 						}
