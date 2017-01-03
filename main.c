@@ -343,6 +343,7 @@ int filterKeyStroke(int ufile, int ufile_mouse, const struct input_event const* 
 
 	switch(pEvent->code){
 //	case KEY_POWER:
+#if 0 /* Handle ALL media players outside ebindkeys in configurable onPlay and onStop scripts. */	  
 	case KEY_PLAYCD:
 		{
 			//checkfor /tmp/run/gmu.pid
@@ -377,6 +378,8 @@ int filterKeyStroke(int ufile, int ufile_mouse, const struct input_event const* 
 			}
 		}
 		break;
+#else
+#endif
 	case KEY_OPTION:
 		if(bExperiment){
 			//send the <ctrl> keystroke
@@ -1189,7 +1192,18 @@ int main (int argc, char **argv)
 					if(ievent.code == KEY_LEFTCTRL)
 						bTempProcessMouse=0;
 				}
-
+#if 1
+				// Filter out media buttons completely (press, release, and repeat)
+				if ( ievent.type == EV_KEY ) switch (ievent.code) {
+				  case KEY_PLAYCD:
+				  case KEY_STOPCD:
+				  case KEY_KPPLUS:
+				  case KEY_KPMINUS:
+				  case KEY_RESERVED:
+				    bFiltered = 1;
+				    break;
+				  }
+#endif				
 				if(!bFiltered)
 					write(ufile, &ievent, sizeof(struct input_event));
 
