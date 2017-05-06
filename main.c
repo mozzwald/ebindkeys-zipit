@@ -246,15 +246,16 @@ int send_event(int ufile, __u16 type, __u16 code, __s32 value)
 	return 0;
 }
 
-
 #define MAX_ACCEL 24
 #define ACCEL_DIVIDOR 3
+
+static int moving, accel;
 
 int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 {
 	int dx=0;
 	int dy=0;
-	static int moving, accel;
+	//static int moving, accel;
 
 	uint32_t code;
 	int bEventHandled = 1;
@@ -263,33 +264,33 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 
 		case KEY_UP:
 			if (pEvent->value == 0)
-				moving--;
+				moving = moving & 0xE; // moving--;
 			else {//if (pEvent->value == 1)
-				moving++;
+				moving = moving | 0x1; // moving++;
 				dy=-1;
 			}
 			break;
 		case KEY_DOWN:
 			if (pEvent->value == 0)
-				moving--;
+				moving = moving & 0xD; // moving--;
 			else{//if (pEvent->value == 1)
-				moving++;
+				moving = moving | 0x2; // moving++;
 				dy=1;
 			}
 			break;
 		case KEY_RIGHT:
 			if (pEvent->value == 0)
-				moving--;
+				moving = moving & 0xB; // moving--;
 			else{//if (pEvent->value == 1)
-				moving++;
+				moving = moving | 0x4; // moving++;
 				dx=1;
 			}
 			break;
 		case KEY_LEFT:
 			if (pEvent->value == 0)
-				moving--;
+				moving = moving & 0x7; // moving--;
 			else{//if (pEvent->value == 1)
-				moving++;
+				moving = moving | 0x8; // moving++;
 				dx=-1;
 			}
 			break;
@@ -310,11 +311,7 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 
 
 	}
-
-	/* Clamp value */
-	moving = moving < 0 ? 0 : moving;
-	moving = moving > 4 ? 4 : moving;
-
+	
 	if (moving) {
 		if (accel < MAX_ACCEL)
 			accel++;
@@ -1118,6 +1115,7 @@ int main (int argc, char **argv)
 					bFiltered = process_mouse_event(ufile_mouse, &ievent);
 						if(bFiltered) continue;
 				}
+				else moving = accel = 0;
 				/* Key has been pressed */
 				if ( ievent.type == EV_KEY && ievent.value == EBK_KEY_DOWN )
 				{
