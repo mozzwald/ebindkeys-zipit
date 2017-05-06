@@ -246,8 +246,13 @@ int send_event(int ufile, __u16 type, __u16 code, __s32 value)
 	return 0;
 }
 
+#if 0
 #define MAX_ACCEL 24
 #define ACCEL_DIVIDOR 3
+#else
+#define MAX_ACCEL 64
+#define ACCEL_DIVIDOR 8
+#endif
 
 static int moving, accel;
 
@@ -312,12 +317,25 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 
 	}
 	
+#if 0
+	/* Clamp value */
+	moving = moving < 0 ? 0 : moving;
+	moving = moving > 4 ? 4 : moving;
+#else
+#endif
+
 	if (moving) {
 		if (accel < MAX_ACCEL)
 			accel++;
 
+#if 1
 		send_event(ufile_mouse, EV_REL, REL_X, dx * (1 + accel / ACCEL_DIVIDOR));
 		send_event(ufile_mouse, EV_REL, REL_Y, dy * (1 + accel / ACCEL_DIVIDOR));
+#else
+		// Try no acceleration.
+		send_event(ufile_mouse, EV_REL, REL_X, dx);
+		send_event(ufile_mouse, EV_REL, REL_Y, dy);
+#endif		
 		send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
 	} else
 		accel = 0;
