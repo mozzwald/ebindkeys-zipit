@@ -907,8 +907,8 @@ void* bldaemonLoop()
 			if (power) {	// AC is plugged in
 				screenOn();
 
-				set_timer(keys_timerid, 0);
-				set_timer(lcd_timerid, 0);
+				set_timer(keys_timerid, conf->keytimeouta);
+				set_timer(lcd_timerid, conf->lcdtimeouta);
 
 				//store current brightness as dim values
 				conf->dimscrb = getscrb();
@@ -1142,15 +1142,18 @@ int main (int argc, char **argv)
 							fflush(stdout);
 						}
 
-						/* reset the timers and turn on the lights
-						 * only if we are on battery */
-						if(!powerstate()){
+						/* reset the timers and turn on the lights */
+						if(!powerstate()){ // on Battery
 							set_timer(keys_timerid, conf->keytimeout);
 							if ( lcd_timer_enable != 0 )
 								set_timer(lcd_timerid, conf->lcdtimeout);
-							screenOn();
-							keysOn();
+						}else{ // on AC
+							set_timer(keys_timerid, conf->keytimeouta);
+							if ( lcd_timer_enable != 0 )
+								set_timer(lcd_timerid, conf->lcdtimeouta);
 						}
+						screenOn();
+						keysOn();
 
 						/* if no other keys are pressed, filter the keystroke */
 						if(list_start->next == NULL)
@@ -1304,10 +1307,12 @@ settings *load_settings (const char *conffile)
 		CFG_STR("scrbfile", "/sys/class/backlight/pxabus:display-backlight/", CFGF_NONE),
 		CFG_INT("brightscrb", 8, CFGF_NONE),
 		CFG_INT("dimscrb", 3, CFGF_NONE),
+		CFG_INT("lcdtimeouta", 0, CFGF_NONE),
 		CFG_INT("lcdtimeout", 6000, CFGF_NONE),
 		CFG_STR("keybfile", "/sys/class/backlight/pxabus:keyboard-backlight/", CFGF_NONE),
 		CFG_INT("brightkeyb", 2, CFGF_NONE),
 		CFG_INT("dimkeyb", 1, CFGF_NONE),
+		CFG_INT("keytimeouta", 0, CFGF_NONE),
 		CFG_INT("keytimeout", 500, CFGF_NONE),
 		CFG_INT("notifyled", 2, CFGF_NONE),
 		CFG_END()
@@ -1328,9 +1333,11 @@ settings *load_settings (const char *conffile)
 	tmpconf->keybfile = strdup(cfg_getstr(cfg, "keybfile"));
 	tmpconf->brightscrb = cfg_getint(cfg, "brightscrb");
 	tmpconf->dimscrb = cfg_getint(cfg, "dimscrb");
+	tmpconf->lcdtimeouta = cfg_getint(cfg, "lcdtimeouta");
 	tmpconf->lcdtimeout = cfg_getint(cfg, "lcdtimeout");
 	tmpconf->brightkeyb = cfg_getint(cfg, "brightkeyb");
 	tmpconf->dimkeyb = cfg_getint(cfg, "dimkeyb");
+	tmpconf->keytimeouta = cfg_getint(cfg, "keytimeouta");
 	tmpconf->keytimeout = cfg_getint(cfg, "keytimeout");
 	tmpconf->notifyled = cfg_getint(cfg, "notifyled");
 

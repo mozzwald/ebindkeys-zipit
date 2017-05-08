@@ -30,7 +30,8 @@ typedef struct {
 	char *onpwrdown;
 	char *scrbfile;
 	char *keybfile;
-	long int brightscrb, dimscrb, lcdtimeout, brightkeyb, dimkeyb, keytimeout, notifyled;
+	long int brightscrb, dimscrb, lcdtimeouta, lcdtimeout,
+		brightkeyb, dimkeyb, keytimeouta, keytimeout, notifyled;
 	unsigned short opts;
 	event *event_first;
 } settings;
