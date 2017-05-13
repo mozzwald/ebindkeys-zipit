@@ -299,24 +299,25 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 				dx=-1;
 			}
 			break;
-		case KEY_END: //} else if (pEvent->code == lbutton_code {
-			send_event(ufile_mouse, EV_KEY, BTN_LEFT, pEvent->value);
-			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
-			break;
-		case KEY_STOPCD: //} else if (pEvent->code == rbutton_code) {
-			send_event(ufile_mouse, EV_KEY, BTN_RIGHT, pEvent->value);
-			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
-			break;
-		case KEY_PLAYCD: //} else if (pEvent->code == mbutton_code) {
-			send_event(ufile_mouse, EV_KEY, BTN_MIDDLE, pEvent->value);
-			send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
-			break;
 		default:
 			bEventHandled = 0;
-
-
 	}
-	
+
+	/* Check for left, middle & right mouse button press */
+	if (pEvent->code == conf->lmousebttn) {
+		send_event(ufile_mouse, EV_KEY, BTN_LEFT, pEvent->value);
+		send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
+		bEventHandled = 1;
+	} else if (pEvent->code == conf->rmousebttn) {
+		send_event(ufile_mouse, EV_KEY, BTN_RIGHT, pEvent->value);
+		send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
+		bEventHandled = 1;
+	} else if (pEvent->code == conf->mmousebttn) {
+		send_event(ufile_mouse, EV_KEY, BTN_MIDDLE, pEvent->value);
+		send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
+		bEventHandled = 1;
+	}
+
 #if 0
 	/* Clamp value */
 	moving = moving < 0 ? 0 : moving;
@@ -335,7 +336,7 @@ int process_mouse_event(int ufile_mouse, const struct input_event const* pEvent)
 		// Try no acceleration.
 		send_event(ufile_mouse, EV_REL, REL_X, dx);
 		send_event(ufile_mouse, EV_REL, REL_Y, dy);
-#endif		
+#endif
 		send_event(ufile_mouse, EV_SYN, SYN_REPORT, 0);
 	} else
 		accel = 0;
@@ -1300,7 +1301,6 @@ settings *load_settings (const char *conffile)
 		CFG_BOOL("daemon", 1, CFGF_NONE),
 		CFG_STR("dev", "/dev/input/event0", CFGF_NONE),
 		CFG_SEC("event", ebk_event_opts, CFGF_MULTI),
-		// New options for backlight daemon control
 		CFG_STR("pwrdev", "/dev/input/event1", CFGF_NONE),
 		CFG_STR("pwrcmd", "/usr/sbin/suspend", CFGF_NONE),
 		CFG_STR("onpwrdown", "/usr/sbin/onPowerDown", CFGF_NONE),
@@ -1315,6 +1315,9 @@ settings *load_settings (const char *conffile)
 		CFG_INT("keytimeouta", 0, CFGF_NONE),
 		CFG_INT("keytimeout", 500, CFGF_NONE),
 		CFG_INT("notifyled", 2, CFGF_NONE),
+		CFG_INT("lmousebttn", 200, CFGF_NONE),
+		CFG_INT("mmousebttn", 28, CFGF_NONE),
+		CFG_INT("rmousebttn", 166, CFGF_NONE),
 		CFG_END()
 	};
 
@@ -1340,6 +1343,9 @@ settings *load_settings (const char *conffile)
 	tmpconf->keytimeouta = cfg_getint(cfg, "keytimeouta");
 	tmpconf->keytimeout = cfg_getint(cfg, "keytimeout");
 	tmpconf->notifyled = cfg_getint(cfg, "notifyled");
+	tmpconf->lmousebttn = cfg_getint(cfg, "lmousebttn");
+	tmpconf->mmousebttn = cfg_getint(cfg, "mmousebttn");
+	tmpconf->rmousebttn = cfg_getint(cfg, "rmousebttn");
 
 	if ( ! cfg_getbool(cfg, "daemon") )
 		tmpconf->opts |= EBK_NODAEMON;

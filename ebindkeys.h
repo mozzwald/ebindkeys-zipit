@@ -1,5 +1,5 @@
 /* ebindkeys.h - holds a few defines for ebindkeys.c
- * 
+ *
  * */
 
 #define EBK_NODAEMON 0x01
@@ -31,7 +31,8 @@ typedef struct {
 	char *scrbfile;
 	char *keybfile;
 	long int brightscrb, dimscrb, lcdtimeouta, lcdtimeout,
-		brightkeyb, dimkeyb, keytimeouta, keytimeout, notifyled;
+		brightkeyb, dimkeyb, keytimeouta, keytimeout,
+		notifyled, lmousebttn, mmousebttn, rmousebttn;
 	unsigned short opts;
 	event *event_first;
 } settings;
